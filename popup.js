@@ -58,6 +58,12 @@ const elements = {
         refreshCurrentTime: document.getElementById('refresh-current-time'),
         copyTimeResult: document.getElementById('copy-time-result'),
         timeResult: document.getElementById('time-result'),
+        // Time Zone Conversion elements
+        sourceTimezone: document.getElementById('source-timezone'),
+        sourceTime: document.getElementById('source-time'),
+        targetTimezone: document.getElementById('target-timezone'),
+        targetTime: document.getElementById('target-time'),
+        convertTimezone: document.getElementById('convert-timezone'),
     // MD5 Tools
     md5Input: document.getElementById('md5-input'),
     md5Output: document.getElementById('md5-output'),
@@ -149,6 +155,8 @@ function setupEventListeners() {
         elements.convertToTimestamp.addEventListener('click', convertToTimestamp);
         elements.convertCurrentToTimestamp.addEventListener('click', convertCurrentToTimestamp);
         elements.copyTimeResult.addEventListener('click', copyTimeResult);
+        // Time Zone Conversion
+        elements.convertTimezone.addEventListener('click', convertTimezone);
     
     // MD5 Tools
     elements.generateMd5.addEventListener('click', generateMd5);
@@ -1236,7 +1244,33 @@ function convertToTimestamp() {
         if (!dateTime) {
             return;
         }
-        const date = new Date(dateTime.replace(',', '.'));
+        
+        // Parse date time (supports both yyyy-MM-dd HH:mm:ss and yyyy-MM-dd HH:mm:ss.sss)
+        let datePart, timePart, milliseconds = 0;
+        if (dateTime.includes(',')) {
+            // Format with milliseconds: yyyy-MM-dd HH:mm:ss,sss
+            const [dateTimePart, msPart] = dateTime.split(',');
+            [datePart, timePart] = dateTimePart.split(' ');
+            milliseconds = parseInt(msPart) || 0;
+        } else if (dateTime.includes('.')) {
+            // Format with milliseconds: yyyy-MM-dd HH:mm:ss.sss
+            const [dateTimePart, msPart] = dateTime.split('.');
+            [datePart, timePart] = dateTimePart.split(' ');
+            milliseconds = parseInt(msPart) || 0;
+        } else {
+            // Format without milliseconds: yyyy-MM-dd HH:mm:ss
+            [datePart, timePart] = dateTime.split(' ');
+        }
+        
+        if (!datePart || !timePart) {
+            return;
+        }
+        
+        const [year, month, day] = datePart.split('-').map(Number);
+        const [hours, minutes, seconds] = timePart.split(':').map(Number);
+        
+        // Create date object
+        const date = new Date(year, month - 1, day, hours, minutes, seconds, milliseconds);
         const timestamp = Math.floor(date.getTime() / 1000);
         elements.timeResult.textContent = timestamp.toString();
     } catch (error) {
@@ -1273,6 +1307,90 @@ function copyTimeResult() {
         });
     } catch (error) {
         console.error('Error copying time result:', error);
+    }
+}
+
+// Time Zone Conversion function
+function convertTimezone() {
+    try {
+        const sourceTime = elements.sourceTime.value.trim();
+        if (!sourceTime) {
+            console.log('Source time is empty');
+            return;
+        }
+        
+        const sourceTimezone = parseInt(elements.sourceTimezone.value);
+        const targetTimezone = parseInt(elements.targetTimezone.value);
+        
+        console.log('Converting time:', {
+            sourceTime,
+            sourceTimezone,
+            targetTimezone
+        });
+        
+        // Parse source time (supports both yyyy-MM-dd HH:mm:ss and yyyy-MM-dd HH:mm:ss.sss)
+        let datePart, timePart, milliseconds = 0;
+        if (sourceTime.includes(',')) {
+            // Format with milliseconds: yyyy-MM-dd HH:mm:ss,sss
+            const [dateTimePart, msPart] = sourceTime.split(',');
+            [datePart, timePart] = dateTimePart.split(' ');
+            milliseconds = parseInt(msPart) || 0;
+        } else if (sourceTime.includes('.')) {
+            // Format with milliseconds: yyyy-MM-dd HH:mm:ss.sss
+            const [dateTimePart, msPart] = sourceTime.split('.');
+            [datePart, timePart] = dateTimePart.split(' ');
+            milliseconds = parseInt(msPart) || 0;
+        } else {
+            // Format without milliseconds: yyyy-MM-dd HH:mm:ss
+            [datePart, timePart] = sourceTime.split(' ');
+        }
+        
+        if (!datePart || !timePart) {
+            console.log('Invalid time format');
+            return;
+        }
+        
+        const [year, month, day] = datePart.split('-').map(Number);
+        const [hours, minutes, seconds] = timePart.split(':').map(Number);
+        
+        console.log('Parsed time components:', {
+            year,
+            month,
+            day,
+            hours,
+            minutes,
+            seconds,
+            milliseconds
+        });
+        
+        // Create date object in source timezone
+        const sourceDate = new Date(year, month - 1, day, hours, minutes, seconds, milliseconds);
+        console.log('Source date:', sourceDate);
+        
+        // Calculate timezone offset difference
+        const offsetDiff = (targetTimezone - sourceTimezone) * 60 * 60 * 1000;
+        console.log('Offset difference (ms):', offsetDiff);
+        
+        // Convert to target timezone
+        const targetDate = new Date(sourceDate.getTime() + offsetDiff);
+        console.log('Target date:', targetDate);
+        
+        // Format target time with milliseconds
+        const formattedYear = targetDate.getFullYear();
+        const formattedMonth = String(targetDate.getMonth() + 1).padStart(2, '0');
+        const formattedDay = String(targetDate.getDate()).padStart(2, '0');
+        const formattedHours = String(targetDate.getHours()).padStart(2, '0');
+        const formattedMinutes = String(targetDate.getMinutes()).padStart(2, '0');
+        const formattedSeconds = String(targetDate.getSeconds()).padStart(2, '0');
+        const formattedMilliseconds = String(targetDate.getMilliseconds()).padStart(3, '0');
+        
+        const formattedTargetTime = `${formattedYear}-${formattedMonth}-${formattedDay} ${formattedHours}:${formattedMinutes}:${formattedSeconds}.${formattedMilliseconds}`;
+        console.log('Formatted target time:', formattedTargetTime);
+        
+        elements.targetTime.value = formattedTargetTime;
+        console.log('Target time updated successfully');
+    } catch (error) {
+        console.error('Error converting timezone:', error);
     }
 }
 
