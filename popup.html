@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title></title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="toolkit-container">
+        <!-- Header -->
+        <div class="header">
+            <h1>ToolKit</h1>
+        </div>
+        
+        <!-- Tool Menu -->
+            <div class="tool-menu">
+                <button class="menu-button active" data-menu="http">HTTP Client</button>
+                <button class="menu-button" data-menu="json">JSON</button>
+                <button class="menu-button" data-menu="base64">Base64</button>
+                <button class="menu-button" data-menu="url">URL</button>
+                <button class="menu-button" data-menu="time">Time</button>
+                <button class="menu-button" data-menu="md5">MD5</button>
+            </div>
+        
+        <!-- Menu Contents -->
+        <div class="menu-contents">
+            <!-- HTTP Client -->
+            <div class="menu-content active" id="http-content">
+                <div class="http-client">
+                    <div class="header-buttons">
+                        <button id="import-curl">Import cURL</button>
+                        <button id="export-curl">Export cURL</button>
+                    </div>
+                    
+                    <!-- Request Configuration -->
+                    <div class="request-section">
+                        <!-- Method and URL -->
+                        <div class="method-url-section">
+                            <select id="http-method">
+                                <option value="GET">GET</option>
+                                <option value="POST">POST</option>
+                                <option value="PUT">PUT</option>
+                                <option value="DELETE">DELETE</option>
+                                <option value="PATCH">PATCH</option>
+                                <option value="HEAD">HEAD</option>
+                                <option value="OPTIONS">OPTIONS</option>
+                            </select>
+                            <input type="text" id="url" placeholder="Enter URL (e.g., https://api.example.com)">
+                        </div>
+                        
+                        <!-- Tabs for Headers and Body -->
+                        <div class="tabs">
+                            <button class="tab-button active" data-tab="headers">Headers</button>
+                            <button class="tab-button" data-tab="params">Params</button>
+                            <button class="tab-button" data-tab="body">Body</button>
+                        </div>
+                        
+                        <!-- Headers Section -->
+                        <div class="tab-content active" id="headers-content">
+                            <div id="headers-list">
+                                <div class="header-item">
+                                    <input type="text" class="header-name" placeholder="Key">
+                                    <input type="text" class="header-value" placeholder="Value">
+                                    <button class="remove-header">×</button>
+                                </div>
+                            </div>
+                            <button id="add-header">Add Header</button>
+                        </div>
+                        
+                        <!-- Params Section -->
+                        <div class="tab-content" id="params-content">
+                            <div id="params-list">
+                                <div class="param-item">
+                                    <input type="text" class="param-name" placeholder="Key">
+                                    <input type="text" class="param-value" placeholder="Value">
+                                    <button class="remove-param">×</button>
+                                </div>
+                            </div>
+                            <button id="add-param">Add Param</button>
+                        </div>
+                        
+                        <!-- Body Section -->
+                        <div class="tab-content" id="body-content">
+                            <div class="body-section-header">
+                                <select id="body-type">
+                                    <option value="json">JSON</option>
+                                    <option value="form">Form Data</option>
+                                    <option value="text">Plain Text</option>
+                                </select>
+                                <textarea id="request-body" placeholder="Enter request body here..."></textarea>
+                                <button id="beautify-request">Beautify JSON</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Send Button -->
+                    <button id="send-request">Send Request</button>
+                    
+                    <!-- Response Section -->
+                    <div class="response-section">
+                        <h3>Response</h3>
+                        <div class="response-header">
+                            <span id="response-status"></span>
+                            <span id="response-time"></span>
+                            <button id="beautify-response">Beautify JSON</button>
+                            <button id="copy-response">Copy Response</button>
+                            <button id="copy-to-json">Copy to JSON Tool</button>
+                        </div>
+                        <pre id="response-body"></pre>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- JSON Tools -->
+            <div class="menu-content" id="json-content">
+                <div class="json-tool">
+                    <textarea id="json-input" placeholder="Enter JSON here..."></textarea>
+                    <div class="json-buttons">
+                        <button id="beautify-json">Beautify</button>
+                        <button id="minify-json">Minify</button>
+                        <button id="copy-json">Copy</button>
+                    </div>
+                    <div class="json-output-container">
+                        <textarea id="json-output" placeholder="Result will appear here..." style="display: none;"></textarea>
+                        <div id="json-tree" class="json-tree" style="display: none;"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Base64 Tools -->
+            <div class="menu-content" id="base64-content">
+                <div class="base64-tool">
+                    <textarea id="base64-input" placeholder="Enter text or Base64 here..."></textarea>
+                    <div class="base64-buttons">
+                        <button id="encode-base64">Encode</button>
+                        <button id="decode-base64">Decode</button>
+                        <button id="copy-base64">Copy</button>
+                    </div>
+                    <textarea id="base64-output" placeholder="Result will appear here..." readonly></textarea>
+                </div>
+            </div>
+            
+            <!-- URL Tools -->
+            <div class="menu-content" id="url-content">
+                <div class="url-tool">
+                    <textarea id="url-input" placeholder="Enter text or URL here..."></textarea>
+                    <div class="url-buttons">
+                        <button id="encode-url">Encode</button>
+                        <button id="decode-url">Decode</button>
+                        <button id="copy-url">Copy</button>
+                    </div>
+                    <textarea id="url-output" placeholder="Result will appear here..." readonly></textarea>
+                </div>
+            </div>
+            
+            <!-- Time Tools -->
+            <div class="menu-content" id="time-content">
+                <div class="time-tool">
+                    <div class="time-input-section">
+                        <label>Current Time</label>
+                        <input type="text" id="current-time" placeholder="Current time will appear here..." readonly>
+                        <button id="refresh-current-time">Refresh</button>
+                        <button id="convert-current-to-timestamp">Convert to Timestamp</button>
+                    </div>
+                    <div class="time-input-section">
+                        <label>Unix Timestamp</label>
+                        <input type="number" id="unix-timestamp" placeholder="Enter Unix timestamp...">
+                        <span id="timestamp-unit" class="timestamp-unit"></span>
+                        <button id="convert-to-date">Convert to Date</button>
+                    </div>
+                    <div class="time-input-section">
+                        <label>Date/Time</label>
+                        <input type="text" id="date-time" placeholder="Enter date/time (yyyy-MM-dd HH:mm:ss,sss)...">
+                        <button id="convert-to-timestamp">Convert to Timestamp</button>
+                    </div>
+                    <div class="time-result-section">
+                        <label>Result</label>
+                        <div class="time-result" id="time-result"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- MD5 Tools -->
+            <div class="menu-content" id="md5-content">
+                <div class="md5-tool">
+                    <textarea id="md5-input" placeholder="Enter text here..."></textarea>
+                    <div class="md5-buttons">
+                        <button id="generate-md5">Generate MD5</button>
+                        <button id="copy-md5">Copy</button>
+                    </div>
+                    <textarea id="md5-output" placeholder="MD5 hash will appear here..." readonly></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Import cURL Modal -->
+    <div id="import-modal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Import cURL</h2>
+            <textarea id="curl-input" placeholder="Paste cURL command here..."></textarea>
+            <div class="modal-buttons">
+                <button id="cancel-import">Cancel</button>
+                <button id="confirm-import">Import</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>
