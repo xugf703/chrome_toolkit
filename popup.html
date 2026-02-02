@@ -21,6 +21,7 @@
                 <button class="menu-button" data-menu="url">URL</button>
                 <button class="menu-button" data-menu="time">Time</button>
                 <button class="menu-button" data-menu="md5">MD5</button>
+                <button class="menu-button" data-menu="diff">Diff</button>
             </div>
         
         <!-- Menu Contents -->
@@ -263,6 +264,53 @@
                         <button id="copy-md5">Copy</button>
                     </div>
                     <textarea id="md5-output" placeholder="MD5 hash will appear here..." readonly></textarea>
+                </div>
+            </div>
+            
+            <!-- Diff Tool -->
+            <div class="menu-content" id="diff-content">
+                <div class="diff-tool">
+                    <div class="diff-header">
+                        <h3>Text Diff</h3>
+                        <div class="diff-controls">
+                            <button id="compare-diff">Compare</button>
+                            <button id="clear-diff">Clear</button>
+                        </div>
+                    </div>
+                    
+                    <div class="diff-container">
+                        <div class="diff-panel">
+                            <div class="panel-header">
+                                <h4>Left</h4>
+                            </div>
+                            <div class="textarea-with-lines">
+                                <div id="diff-left-lines" class="line-numbers"></div>
+                                <textarea id="diff-left" class="diff-textarea" placeholder="Enter text here..."></textarea>
+                            </div>
+                        </div>
+                        
+                        <div class="diff-controls-center">
+                            <button id="move-right" class="move-button">→</button>
+                            <button id="move-left" class="move-button">←</button>
+                        </div>
+                        
+                        <div class="diff-panel">
+                            <div class="panel-header">
+                                <h4>Right</h4>
+                            </div>
+                            <div class="textarea-with-lines">
+                                <div id="diff-right-lines" class="line-numbers"></div>
+                                <textarea id="diff-right" class="diff-textarea" placeholder="Enter text here..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    
+
+                    
+                    <div class="diff-info" id="diff-info">
+                        <h4>Diff Information</h4>
+                        <div id="diff-details">Select a line to see differences</div>
+                    </div>
                 </div>
             </div>
         </div>

@@ -68,7 +68,17 @@ const elements = {
     md5Input: document.getElementById('md5-input'),
     md5Output: document.getElementById('md5-output'),
     generateMd5: document.getElementById('generate-md5'),
-    copyMd5: document.getElementById('copy-md5')
+    copyMd5: document.getElementById('copy-md5'),
+    // Diff Tools
+    diffLeft: document.getElementById('diff-left'),
+    diffRight: document.getElementById('diff-right'),
+    diffLeftLines: document.getElementById('diff-left-lines'),
+    diffRightLines: document.getElementById('diff-right-lines'),
+    diffDetails: document.getElementById('diff-details'),
+    compareDiff: document.getElementById('compare-diff'),
+    clearDiff: document.getElementById('clear-diff'),
+    moveLeft: document.getElementById('move-left'),
+    moveRight: document.getElementById('move-right')
 };
 
 // Initialize the extension
@@ -161,6 +171,78 @@ function setupEventListeners() {
     // MD5 Tools
     elements.generateMd5.addEventListener('click', generateMd5);
     elements.copyMd5.addEventListener('click', copyMd5Output);
+    
+    // Diff Tools
+    elements.compareDiff.addEventListener('click', compareTextDiff);
+    elements.clearDiff.addEventListener('click', clearTextDiff);
+    // Rebind move buttons with direct DOM references
+    document.getElementById('move-left').addEventListener('click', function() {
+        const rightTextarea = document.getElementById('diff-right');
+        const leftTextarea = document.getElementById('diff-left');
+        const rightLines = rightTextarea.value.split('\n');
+        const leftLines = leftTextarea.value.split('\n');
+        
+        // Get selected line in right textarea
+        const cursorPosition = rightTextarea.selectionStart;
+        const rightText = rightTextarea.value;
+        let currentPosition = 0;
+        let selectedLineIndex = 0;
+        
+        for (let i = 0; i < rightLines.length; i++) {
+            currentPosition += rightLines[i].length + 1; // +1 for newline
+            if (currentPosition > cursorPosition) {
+                selectedLineIndex = i;
+                break;
+            }
+        }
+        
+        // Move selected line from right to left
+        const selectedLine = rightLines[selectedLineIndex];
+        if (selectedLine !== undefined) {
+            const newLeftLines = [...leftLines];
+            newLeftLines[selectedLineIndex] = selectedLine;
+            leftTextarea.value = newLeftLines.join('\n');
+            updateLineNumbers();
+            compareTextDiff();
+        }
+    });
+    document.getElementById('move-right').addEventListener('click', function() {
+        const leftTextarea = document.getElementById('diff-left');
+        const rightTextarea = document.getElementById('diff-right');
+        const leftLines = leftTextarea.value.split('\n');
+        const rightLines = rightTextarea.value.split('\n');
+        
+        // Get selected line in left textarea
+        const cursorPosition = leftTextarea.selectionStart;
+        const leftText = leftTextarea.value;
+        let currentPosition = 0;
+        let selectedLineIndex = 0;
+        
+        for (let i = 0; i < leftLines.length; i++) {
+            currentPosition += leftLines[i].length + 1; // +1 for newline
+            if (currentPosition > cursorPosition) {
+                selectedLineIndex = i;
+                break;
+            }
+        }
+        
+        // Move selected line from left to right
+        const selectedLine = leftLines[selectedLineIndex];
+        if (selectedLine !== undefined) {
+            const newRightLines = [...rightLines];
+            newRightLines[selectedLineIndex] = selectedLine;
+            rightTextarea.value = newRightLines.join('\n');
+            updateLineNumbers();
+            compareTextDiff();
+        }
+    });
+    elements.diffLeft.addEventListener('click', showLineDiff);
+    elements.diffRight.addEventListener('click', showLineDiff);
+    elements.diffLeft.addEventListener('input', updateLineNumbers);
+    elements.diffRight.addEventListener('input', updateLineNumbers);
+    // Add scroll sync for line numbers and overlays
+    elements.diffLeft.addEventListener('scroll', syncScroll);
+    elements.diffRight.addEventListener('scroll', syncScroll);
     
     // Close modal when clicking outside
     window.addEventListener('click', (e) => {
@@ -1577,3 +1659,233 @@ function copyMd5Output() {
         console.error('Error copying MD5 output:', error);
     }
 }
+
+// ==================== Diff Tools Functions ====================
+
+// Compare text diff function
+function compareTextDiff() {
+    const leftText = elements.diffLeft.value;
+    const rightText = elements.diffRight.value;
+    
+    // Check if texts are completely identical
+    if (leftText === rightText) {
+        // Update line numbers with normal color
+        updateLineNumbers();
+        elements.diffDetails.innerHTML = '<span style="text-align: center; display: block; color: #4CAF50; font-weight: bold;">一致</span>';
+        return;
+    }
+    
+    const leftLines = leftText.split('\n');
+    const rightLines = rightText.split('\n');
+    const maxLines = Math.max(leftLines.length, rightLines.length);
+    
+    // Generate line numbers with diff highlighting
+    let leftLineNumbers = '';
+    let rightLineNumbers = '';
+    
+    for (let i = 0; i < maxLines; i++) {
+        const leftLine = leftLines[i] || '';
+        const rightLine = rightLines[i] || '';
+        const isDiff = leftLine !== rightLine;
+        
+        // Left line numbers
+        if (i < leftLines.length) {
+            if (isDiff) {
+                leftLineNumbers += `<span class="line-number-diff">${i + 1}</span><br>`;
+            } else {
+                leftLineNumbers += `${i + 1}<br>`;
+            }
+        }
+        
+        // Right line numbers
+        if (i < rightLines.length) {
+            if (isDiff) {
+                rightLineNumbers += `<span class="line-number-diff">${i + 1}</span><br>`;
+            } else {
+                rightLineNumbers += `${i + 1}<br>`;
+            }
+        }
+    }
+    
+    elements.diffLeftLines.innerHTML = leftLineNumbers;
+    elements.diffRightLines.innerHTML = rightLineNumbers;
+    
+    elements.diffDetails.textContent = `Left: ${leftLines.length} lines, Right: ${rightLines.length} lines`;
+}
+
+// Clear text diff function
+function clearTextDiff() {
+    elements.diffLeft.value = '';
+    elements.diffRight.value = '';
+    elements.diffDetails.textContent = 'Select a line to see differences';
+    elements.diffLeftLines.textContent = '';
+    elements.diffRightLines.textContent = '';
+}
+
+// Move text from right to left function (← button)
+function moveTextLeft() {
+    // Get the entire content from the right textarea
+    const rightContent = document.getElementById('diff-right').value;
+    // Set the entire content to the left textarea
+    document.getElementById('diff-left').value = rightContent;
+    // Update line numbers
+    updateLineNumbers();
+    // Compare text again
+    compareTextDiff();
+}
+
+// Move text from left to right function (→ button)
+function moveTextRight() {
+    // Get the entire content from the left textarea
+    const leftContent = document.getElementById('diff-left').value;
+    // Set the entire content to the right textarea
+    document.getElementById('diff-right').value = leftContent;
+    // Update line numbers
+    updateLineNumbers();
+    // Compare text again
+    compareTextDiff();
+}
+
+// Show line diff function
+function showLineDiff(e) {
+    const textarea = e.target;
+    const cursorPosition = textarea.selectionStart;
+    const text = textarea.value;
+    const lines = text.split('\n');
+    
+    let currentPosition = 0;
+    let lineIndex = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+        currentPosition += lines[i].length + 1; // +1 for the newline
+        if (currentPosition > cursorPosition) {
+            lineIndex = i;
+            break;
+        }
+    }
+    
+    const leftLines = elements.diffLeft.value.split('\n');
+    const rightLines = elements.diffRight.value.split('\n');
+    
+    const leftLine = leftLines[lineIndex] || '';
+    const rightLine = rightLines[lineIndex] || '';
+    
+    if (leftLine !== rightLine) {
+        elements.diffDetails.innerHTML = `Line ${lineIndex + 1} differences:<br>` +
+            `<b>Left__:</b> ${escapeHtml(leftLine)}<br>` +
+            `<b>Right:</b> ${escapeHtml(rightLine)}`;
+    } else {
+        elements.diffDetails.textContent = `Line ${lineIndex + 1}: No differences`;
+    }
+}
+
+// Generate diff highlight function
+function generateDiffHighlight(leftLines, rightLines) {
+    const maxLines = Math.max(leftLines.length, rightLines.length);
+    let leftHighlight = '';
+    let rightHighlight = '';
+    
+    for (let i = 0; i < maxLines; i++) {
+        const leftLine = leftLines[i] || '';
+        const rightLine = rightLines[i] || '';
+        
+        if (leftLine === rightLine) {
+            leftHighlight += `<span>${escapeHtml(leftLine)}</span>\n`;
+            rightHighlight += `<span>${escapeHtml(rightLine)}</span>\n`;
+        } else {
+            const { leftDiff, rightDiff } = highlightLineDiff(leftLine, rightLine);
+            leftHighlight += `<span>${leftDiff}</span>\n`;
+            rightHighlight += `<span>${rightDiff}</span>\n`;
+        }
+    }
+    
+    return { leftHighlight, rightHighlight };
+}
+
+// Highlight line diff function
+function highlightLineDiff(leftLine, rightLine) {
+    if (leftLine === '') {
+        return {
+            leftDiff: '',
+            rightDiff: `<ins>${escapeHtml(rightLine)}</ins>`
+        };
+    }
+    
+    if (rightLine === '') {
+        return {
+            leftDiff: `<del>${escapeHtml(leftLine)}</del>`,
+            rightDiff: ''
+        };
+    }
+    
+    // Simple word-level diff (for demonstration purposes)
+    const leftWords = leftLine.split(/(\s+)/);
+    const rightWords = rightLine.split(/(\s+)/);
+    
+    let leftDiff = '';
+    let rightDiff = '';
+    
+    const maxWords = Math.max(leftWords.length, rightWords.length);
+    
+    for (let i = 0; i < maxWords; i++) {
+        const leftWord = leftWords[i] || '';
+        const rightWord = rightWords[i] || '';
+        
+        if (leftWord === rightWord) {
+            leftDiff += escapeHtml(leftWord);
+            rightDiff += escapeHtml(rightWord);
+        } else {
+            if (leftWord) {
+                leftDiff += `<del>${escapeHtml(leftWord)}</del>`;
+            }
+            if (rightWord) {
+                rightDiff += `<ins>${escapeHtml(rightWord)}</ins>`;
+            }
+        }
+    }
+    
+    return { leftDiff, rightDiff };
+}
+
+// Escape HTML function
+function escapeHtml(text) {
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+// Update line numbers function
+function updateLineNumbers() {
+    // Update left textarea line numbers
+    const leftText = elements.diffLeft.value;
+    const leftLines = leftText.split('\n').length;
+    let leftLineNumbers = '';
+    for (let i = 1; i <= leftLines; i++) {
+        leftLineNumbers += `${i}<br>`;
+    }
+    elements.diffLeftLines.innerHTML = leftLineNumbers;
+    
+    // Update right textarea line numbers
+    const rightText = elements.diffRight.value;
+    const rightLines = rightText.split('\n').length;
+    let rightLineNumbers = '';
+    for (let i = 1; i <= rightLines; i++) {
+        rightLineNumbers += `${i}<br>`;
+    }
+    elements.diffRightLines.innerHTML = rightLineNumbers;
+}
+
+// Sync scroll function for line numbers
+function syncScroll(e) {
+    const element = e.target;
+    if (element === elements.diffLeft) {
+        elements.diffLeftLines.scrollTop = element.scrollTop;
+    } else if (element === elements.diffRight) {
+        elements.diffRightLines.scrollTop = element.scrollTop;
+    }
+}
+
+
