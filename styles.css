@@ -587,6 +587,50 @@ body {
     color: white;
 }
 
+.file-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    margin-left: auto;
+    white-space: nowrap;
+    transition: all 0.3s ease;
+    border: 1px solid transparent;
+}
+
+.file-status.unconfigured {
+    color: #999;
+    border-color: #ddd;
+    background: #f5f5f5;
+}
+
+.file-status.unconfigured:hover {
+    background: #e0e0e0;
+    color: #666;
+}
+
+.file-status.connected {
+    color: #2e7d32;
+    border-color: #a5d6a7;
+    background: #e8f5e9;
+}
+
+.file-status.connected:hover {
+    background: #c8e6c9;
+}
+
+.file-status.warning {
+    color: #e65100;
+    border-color: #ffcc80;
+    background: #fff3e0;
+}
+
+.file-status.warning:hover {
+    background: #ffe0b2;
+}
+
 /* Request Section */
 .request-section {
     margin-bottom: 20px;

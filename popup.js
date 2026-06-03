@@ -100,6 +100,7 @@ function init() {
     setupEventListeners();
     setupDefaultHeaders();
     updateCurrentTime();
+    initializeFavoritesFile();
 }
 
 function updateCurrentTime() {
@@ -145,6 +146,12 @@ function setupEventListeners() {
     
     // Save request
     elements.saveRequest.addEventListener('click', saveRequest);
+    
+    // File status bar click for favorite file config
+    const fileStatusEl = document.getElementById('file-status');
+    if (fileStatusEl) {
+        fileStatusEl.addEventListener('click', handleFileStatusClick);
+    }
     
     // Show favorites
     elements.showFavorites.addEventListener('click', showFavorites);
@@ -1471,8 +1478,268 @@ function capitalize(str) {
     return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
+// ==================== IndexedDB + File System Access API ====================
+
+const DB_NAME = 'ToolKitFileDB';
+const DB_VERSION = 1;
+const HANDLE_STORE = 'fileHandles';
+const HANDLE_KEY = 'httpFavoritesHandle';
+const CACHE_KEY = 'httpClientFavorites';
+
+function openFileDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(HANDLE_STORE)) {
+                db.createObjectStore(HANDLE_STORE);
+            }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function saveHandleToDB(id, handle) {
+    const db = await openFileDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(HANDLE_STORE, 'readwrite');
+        const store = tx.objectStore(HANDLE_STORE);
+        store.put(handle, id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+}
+
+async function loadHandleFromDB(id) {
+    try {
+        const db = await openFileDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(HANDLE_STORE, 'readonly');
+            const store = tx.objectStore(HANDLE_STORE);
+            const req = store.get(id);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    } catch (e) {
+        return null;
+    }
+}
+
+async function removeHandleFromDB(id) {
+    const db = await openFileDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(HANDLE_STORE, 'readwrite');
+        const store = tx.objectStore(HANDLE_STORE);
+        store.delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+}
+
+async function hasFileConfigured() {
+    const handle = await loadHandleFromDB(HANDLE_KEY);
+    return !!handle;
+}
+
+async function verifyFilePermission(handle) {
+    if (!handle) return false;
+    try {
+        const opts = { mode: 'readwrite' };
+        const state = await handle.queryPermission(opts);
+        return state === 'granted';
+    } catch (e) {
+        return false;
+    }
+}
+
+async function requestFilePermission(handle) {
+    if (!handle) return false;
+    try {
+        const opts = { mode: 'readwrite' };
+        const state = await handle.requestPermission(opts);
+        return state === 'granted';
+    } catch (e) {
+        return false;
+    }
+}
+
+async function createNewFavoritesFile() {
+    try {
+        const handle = await window.showSaveFilePicker({
+            suggestedName: 'http_favorites.json',
+            types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(JSON.stringify({ version: '1.0', updatedAt: new Date().toISOString(), favorites: [] }, null, 2));
+        await writable.close();
+        await saveHandleToDB(HANDLE_KEY, handle);
+        return handle;
+    } catch (e) {
+        if (e.name === 'AbortError') return null;
+        throw e;
+    }
+}
+
+async function openExistingFavoritesFile() {
+    try {
+        const [handle] = await window.showOpenFilePicker({
+            types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
+            multiple: false
+        });
+        await saveHandleToDB(HANDLE_KEY, handle);
+        return handle;
+    } catch (e) {
+        if (e.name === 'AbortError') return null;
+        throw e;
+    }
+}
+
+async function configureFavoritesFile() {
+    const choice = confirm(
+        'HTTP Client 收藏文件配置\n\n' +
+        '点击"确定" → 选择已有的 http_favorites.json\n' +
+        '点击"取消" → 创建新的 http_favorites.json'
+    );
+    let handle;
+    if (choice) {
+        handle = await openExistingFavoritesFile();
+    } else {
+        handle = await createNewFavoritesFile();
+    }
+    if (handle) {
+        const favorites = await readFavoritesFromFile(handle);
+        await chrome.storage.local.set({ [CACHE_KEY]: favorites });
+        await updateFileStatus();
+    }
+    return !!handle;
+}
+
+async function readFavoritesFromFile(handle) {
+    try {
+        const file = await handle.getFile();
+        const text = await file.text();
+        if (!text.trim()) return [];
+        const data = JSON.parse(text);
+        return Array.isArray(data.favorites) ? data.favorites : (Array.isArray(data) ? data : []);
+    } catch (e) {
+        console.warn('Failed to read favorites file:', e);
+        return [];
+    }
+}
+
+async function writeFavoritesToFile(handle, favorites) {
+    try {
+        const writable = await handle.createWritable();
+        const data = JSON.stringify({
+            version: '1.0',
+            updatedAt: new Date().toISOString(),
+            favorites: favorites
+        }, null, 2);
+        await writable.write(data);
+        await writable.close();
+        return true;
+    } catch (e) {
+        console.error('Failed to write favorites file:', e);
+        return false;
+    }
+}
+
+async function getFavorites() {
+    const cached = await chrome.storage.local.get(CACHE_KEY);
+    return cached[CACHE_KEY] || [];
+}
+
+async function setFavorites(favorites) {
+    await chrome.storage.local.set({ [CACHE_KEY]: favorites });
+    syncFavoritesToFile(favorites);
+}
+
+async function syncFavoritesToFile(favorites) {
+    try {
+        const handle = await loadHandleFromDB(HANDLE_KEY);
+        if (!handle) return;
+        if (!(await verifyFilePermission(handle))) return;
+        await writeFavoritesToFile(handle, favorites);
+    } catch (e) {
+        console.warn('Sync to file failed:', e);
+    }
+}
+
+async function initializeFavoritesFile() {
+    const configured = await hasFileConfigured();
+    if (configured) {
+        const handle = await loadHandleFromDB(HANDLE_KEY);
+        if (handle && (await verifyFilePermission(handle))) {
+            const fileFavorites = await readFavoritesFromFile(handle);
+            const cached = await chrome.storage.local.get(CACHE_KEY);
+            if (fileFavorites.length > 0) {
+                await chrome.storage.local.set({ [CACHE_KEY]: fileFavorites });
+            } else if (!cached[CACHE_KEY]) {
+                await chrome.storage.local.set({ [CACHE_KEY]: [] });
+            }
+        }
+    }
+    await updateFileStatus();
+}
+
+async function updateFileStatus() {
+    const statusEl = document.getElementById('file-status');
+    if (!statusEl) return;
+    const handle = await loadHandleFromDB(HANDLE_KEY);
+    if (!handle) {
+        statusEl.textContent = '📁 未配置';
+        statusEl.className = 'file-status unconfigured';
+        statusEl.title = '点击配置文件保存路径';
+        return;
+    }
+    const hasPerm = await verifyFilePermission(handle);
+    if (hasPerm) {
+        try {
+            const file = await handle.getFile();
+            statusEl.textContent = '📁 ' + file.name;
+            statusEl.className = 'file-status connected';
+            statusEl.title = '文件已连接: ' + file.name;
+        } catch (e) {
+            statusEl.textContent = '📁 已配置';
+            statusEl.className = 'file-status connected';
+        }
+    } else {
+        statusEl.textContent = '⚠️ 需授权';
+        statusEl.className = 'file-status warning';
+        statusEl.title = '点击重新授权文件访问';
+    }
+}
+
+async function handleFileStatusClick() {
+    const handle = await loadHandleFromDB(HANDLE_KEY);
+    if (!handle) {
+        await configureFavoritesFile();
+        return;
+    }
+    const hasPerm = await verifyFilePermission(handle);
+    if (!hasPerm) {
+        const granted = await requestFilePermission(handle);
+        if (granted) {
+            const favorites = await readFavoritesFromFile(handle);
+            await chrome.storage.local.set({ [CACHE_KEY]: favorites });
+        }
+    } else {
+        const reconnect = confirm('文件已连接。\n\n"确定" → 更换文件\n"取消" → 断开文件连接');
+        if (reconnect) {
+            await configureFavoritesFile();
+        } else {
+            const disconnect = confirm('确定要断开文件连接吗？断开后收藏数据将只保存在浏览器中。');
+            if (disconnect) {
+                await removeHandleFromDB(HANDLE_KEY);
+            }
+        }
+    }
+    await updateFileStatus();
+}
+
 // Save request to favorites
-function saveRequest() {
+async function saveRequest() {
     const url = elements.url.value;
     if (!url) {
         alert('Please enter a URL');
@@ -1520,22 +1787,22 @@ function saveRequest() {
         }
     });
     
-    // Get favorites from localStorage
-    let favorites = JSON.parse(localStorage.getItem('httpClientFavorites') || '[]');
+    // Get favorites from storage
+    let favorites = await getFavorites();
     
     // Add new request to favorites
     favorites.push(request);
     
-    // Save back to localStorage
-    localStorage.setItem('httpClientFavorites', JSON.stringify(favorites));
+    // Save back to storage
+    await setFavorites(favorites);
     
     alert('Request saved to favorites!');
 }
 
 // Show favorites
-function showFavorites() {
-    // Get favorites from localStorage
-    const favorites = JSON.parse(localStorage.getItem('httpClientFavorites') || '[]');
+async function showFavorites() {
+    // Get favorites from storage
+    const favorites = await getFavorites();
     
     // Clear favorites list
     elements.favoritesList.innerHTML = '';
@@ -1630,9 +1897,9 @@ function showFavorites() {
 }
 
 // Load saved request
-function loadRequest(requestId) {
-    // Get favorites from localStorage
-    const favorites = JSON.parse(localStorage.getItem('httpClientFavorites') || '[]');
+async function loadRequest(requestId) {
+    // Get favorites from storage
+    const favorites = await getFavorites();
     
     // Find the request
     const request = favorites.find(r => r.id === requestId);
@@ -1669,25 +1936,25 @@ function loadRequest(requestId) {
 }
 
 // Delete saved request
-function deleteRequest(requestId) {
+async function deleteRequest(requestId) {
     if (!confirm('Are you sure you want to delete this request?')) return;
     
-    // Get favorites from localStorage
-    let favorites = JSON.parse(localStorage.getItem('httpClientFavorites') || '[]');
+    // Get favorites from storage
+    let favorites = await getFavorites();
     
     // Filter out the request
     favorites = favorites.filter(r => r.id !== requestId);
     
-    // Save back to localStorage
-    localStorage.setItem('httpClientFavorites', JSON.stringify(favorites));
+    // Save back to storage
+    await setFavorites(favorites);
     
     // Refresh favorites list
     showFavorites();
 }
 
 // Edit tags of a saved request
-function editRequestTags(requestId) {
-    let favorites = JSON.parse(localStorage.getItem('httpClientFavorites') || '[]');
+async function editRequestTags(requestId) {
+    let favorites = await getFavorites();
     const request = favorites.find(r => r.id === requestId);
     if (!request) return;
 
@@ -1697,7 +1964,7 @@ function editRequestTags(requestId) {
 
     request.tags = newTagsInput.split(',').map(tag => tag.trim()).filter(tag => tag);
 
-    localStorage.setItem('httpClientFavorites', JSON.stringify(favorites));
+    await setFavorites(favorites);
 
     showFavorites();
 }
