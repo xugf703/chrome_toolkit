@@ -43,6 +43,8 @@ const elements = {
     jsonToJava: document.getElementById('json-to-java'),
     javaToJson: document.getElementById('java-to-json'),
     javaOutput: document.getElementById('java-output'),
+    sqlToEntity: document.getElementById('sql-to-entity'),
+    sqlOutput: document.getElementById('sql-output'),
     // Base64 Tools
     base64Input: document.getElementById('base64-input'),
     base64Output: document.getElementById('base64-output'),
@@ -95,7 +97,184 @@ const elements = {
     copyUnicode: document.getElementById('copy-unicode')
 };
 
-// Initialize the extension
+// ==================== Constants ====================
+
+const DOWNLOADABLE_MIME_TYPES = [
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/msword',
+    'application/vnd.ms-excel',
+    'application/vnd.ms-powerpoint',
+    'text/csv',
+    'application/pdf',
+    'application/zip',
+    'application/octet-stream',
+    'application/x-msdownload',
+    'application/x-tar',
+    'application/gzip',
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+    'image/svg+xml',
+    'image/webp',
+    'audio/mpeg',
+    'audio/wav',
+    'video/mp4'
+];
+
+const DOWNLOADABLE_EXTENSIONS = [
+    '.doc', '.docx', '.xls', '.xlsx', '.csv', '.ppt', '.pptx',
+    '.pdf', '.zip', '.tar', '.gz', '.rar', '.7z',
+    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp',
+    '.mp3', '.wav', '.ogg', '.flac',
+    '.mp4', '.avi', '.mov', '.wmv',
+    '.exe', '.msi', '.dmg'
+];
+
+const DEFAULT_HEADERS = [
+    { name: 'Content-Type', value: 'application/json' }
+];
+
+const HTTP_TIMEOUT_MS = 5000;
+
+const DB_NAME = 'ToolKitFileDB';
+const DB_VERSION = 1;
+const HANDLE_STORE = 'fileHandles';
+const HANDLE_KEY = 'httpFavoritesHandle';
+const CACHE_KEY = 'httpClientFavorites';
+
+// ==================== Utility Functions ====================
+
+function copyToClipboard(text) {
+    return navigator.clipboard.writeText(text).catch(err => {
+        console.error('Error copying to clipboard:', err);
+    });
+}
+
+function show(el) { el.style.display = 'block'; }
+function hide(el) { el.style.display = 'none'; }
+
+function formatDateTime(date, includeMs = false) {
+    const y = date.getFullYear();
+    const M = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    const h = String(date.getHours()).padStart(2, '0');
+    const m = String(date.getMinutes()).padStart(2, '0');
+    const s = String(date.getSeconds()).padStart(2, '0');
+    if (includeMs) {
+        const ms = String(date.getMilliseconds()).padStart(3, '0');
+        return `${y}-${M}-${d} ${h}:${m}:${s},${ms}`;
+    }
+    return `${y}-${M}-${d} ${h}:${m}:${s}`;
+}
+
+function collectHeaders() {
+    const headers = {};
+    elements.headersList.querySelectorAll('.header-item').forEach(item => {
+        const name = item.querySelector('.header-name').value;
+        const value = item.querySelector('.header-value').value;
+        if (name && value) headers[name] = value;
+    });
+    return headers;
+}
+
+function collectParams() {
+    const params = {};
+    elements.paramsList.querySelectorAll('.param-item').forEach(item => {
+        const name = item.querySelector('.param-name').value;
+        const value = item.querySelector('.param-value').value;
+        if (name) params[name] = value;
+    });
+    return params;
+}
+
+function createInputRow(className, fields) {
+    const row = document.createElement('div');
+    row.className = className;
+    row.innerHTML = fields.map(f =>
+        `<input type="text" class="${f.className}" placeholder="${f.placeholder || ''}" value="${f.value || ''}">`
+    ).join('') + '<button class="remove-' + className.split('-')[0] + '">×</button>';
+    row.querySelector('button').addEventListener('click', () => row.remove());
+    return row;
+}
+
+function getSelectedLine(textarea) {
+    const lines = textarea.value.split('\n');
+    let pos = 0;
+    for (let i = 0; i < lines.length; i++) {
+        pos += lines[i].length + 1;
+        if (pos > textarea.selectionStart) return i;
+    }
+    return lines.length - 1;
+}
+
+function debounce(fn, delay) {
+    let timer;
+    return function(...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+    };
+}
+
+function toggleView(buttons, contents, activeName) {
+    buttons.forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === activeName || btn.dataset.menu === activeName);
+    });
+    contents.forEach(content => {
+        content.classList.toggle('active', content.id === `${activeName}-content`);
+    });
+}
+
+function copyFromElement(sourceEl, targetEl) {
+    const text = sourceEl.value || sourceEl.textContent || '';
+    if (text) copyToClipboard(text);
+}
+
+function parseDateTimeString(dateTimeStr) {
+    let datePart, timePart, milliseconds = 0;
+    if (dateTimeStr.includes(',')) {
+        const [dtPart, msPart] = dateTimeStr.split(',');
+        [datePart, timePart] = dtPart.split(' ');
+        milliseconds = parseInt(msPart) || 0;
+    } else if (dateTimeStr.includes('.')) {
+        const [dtPart, msPart] = dateTimeStr.split('.');
+        [datePart, timePart] = dtPart.split(' ');
+        milliseconds = parseInt(msPart) || 0;
+    } else {
+        [datePart, timePart] = dateTimeStr.split(' ');
+    }
+    if (!datePart || !timePart) return null;
+    const [year, month, day] = datePart.split('-').map(Number);
+    const [hours, minutes, seconds] = timePart.split(':').map(Number);
+    return { year, month, day, hours, minutes, seconds, milliseconds };
+}
+
+function buildFieldCommentBlock(col) {
+    const hasComment = col.comment && col.comment.trim();
+    const hasDefault = col.defaultValue && col.defaultValue !== '';
+    if (!hasComment && !hasDefault) return '';
+    let block = '\n    /**\n';
+    if (hasComment) {
+        let desc, enumVals;
+        if (col.enumValues) {
+            desc = col.comment;
+            enumVals = col.enumValues;
+        } else {
+            const ce = parseCommentEnum(col.comment);
+            desc = ce.description;
+            enumVals = ce.enumValues;
+        }
+        block += '     * ' + desc + '\n';
+        if (enumVals) block += '     * 值有: ' + enumVals.join(', ') + '\n';
+    }
+    if (hasDefault) block += '     * 默认值: ' + col.defaultValue + '\n';
+    block += '     */\n';
+    return block;
+}
+
+// ==================== Initialization ====================
+
 function init() {
     setupEventListeners();
     setupDefaultHeaders();
@@ -104,16 +283,7 @@ function init() {
 }
 
 function updateCurrentTime() {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
-    const formattedTime = `${year}-${month}-${day} ${hours}:${minutes}:${seconds},${milliseconds}`;
-    elements.currentTime.value = formattedTime;
+    elements.currentTime.value = formatDateTime(new Date(), true);
 }
 
 // Setup event listeners
@@ -136,9 +306,9 @@ function setupEventListeners() {
     });
     
     // Import cURL
-    elements.importCurl.addEventListener('click', () => elements.importModal.style.display = 'block');
-    elements.closeModal.addEventListener('click', () => elements.importModal.style.display = 'none');
-    elements.cancelImport.addEventListener('click', () => elements.importModal.style.display = 'none');
+    elements.importCurl.addEventListener('click', () => show(elements.importModal));
+    elements.closeModal.addEventListener('click', () => hide(elements.importModal));
+    elements.cancelImport.addEventListener('click', () => hide(elements.importModal));
     elements.confirmImport.addEventListener('click', importCurl);
     
     // Export cURL
@@ -157,14 +327,14 @@ function setupEventListeners() {
     elements.showFavorites.addEventListener('click', showFavorites);
     
     // Close favorites modal
-    elements.closeFavorites.addEventListener('click', () => elements.favoritesModal.style.display = 'none');
-    
-    document.querySelector('#favorites-modal .close-modal').addEventListener('click', () => elements.favoritesModal.style.display = 'none');
+    elements.closeFavorites.addEventListener('click', () => hide(elements.favoritesModal));
+
+    document.querySelector('#favorites-modal .close-modal').addEventListener('click', () => hide(elements.favoritesModal));
     
     // Close modal when clicking outside
     window.addEventListener('click', (e) => {
         if (e.target === elements.favoritesModal) {
-            elements.favoritesModal.style.display = 'none';
+            hide(elements.favoritesModal);
         }
     });
     
@@ -185,9 +355,10 @@ function setupEventListeners() {
     elements.beautifyJson.addEventListener('click', beautifyJsonTool);
     elements.minifyJson.addEventListener('click', minifyJsonTool);
     elements.copyJson.addEventListener('click', copyJsonOutput);
-    elements.jsonOutput.addEventListener('input', updateTreeFromOutput);
+    elements.jsonOutput.addEventListener('input', debounce(updateTreeFromOutput, 300));
     elements.jsonToJava.addEventListener('click', jsonToJavaDto);
     elements.javaToJson.addEventListener('click', javaDtoToJson);
+    elements.sqlToEntity.addEventListener('click', sqlToEntity);
     
     // Base64 Tools
     elements.encodeBase64.addEventListener('click', encodeBase64);
@@ -227,27 +398,11 @@ function setupEventListeners() {
         const rightTextarea = document.getElementById('diff-right');
         const leftTextarea = document.getElementById('diff-left');
         const rightLines = rightTextarea.value.split('\n');
-        const leftLines = leftTextarea.value.split('\n');
-        
-        // Get selected line in right textarea
-        const cursorPosition = rightTextarea.selectionStart;
-        const rightText = rightTextarea.value;
-        let currentPosition = 0;
-        let selectedLineIndex = 0;
-        
-        for (let i = 0; i < rightLines.length; i++) {
-            currentPosition += rightLines[i].length + 1; // +1 for newline
-            if (currentPosition > cursorPosition) {
-                selectedLineIndex = i;
-                break;
-            }
-        }
-        
-        // Move selected line from right to left
-        const selectedLine = rightLines[selectedLineIndex];
+        const idx = getSelectedLine(rightTextarea);
+        const selectedLine = rightLines[idx];
         if (selectedLine !== undefined) {
-            const newLeftLines = [...leftLines];
-            newLeftLines[selectedLineIndex] = selectedLine;
+            const newLeftLines = leftTextarea.value.split('\n');
+            newLeftLines[idx] = selectedLine;
             leftTextarea.value = newLeftLines.join('\n');
             updateLineNumbers();
             compareTextDiff();
@@ -257,27 +412,11 @@ function setupEventListeners() {
         const leftTextarea = document.getElementById('diff-left');
         const rightTextarea = document.getElementById('diff-right');
         const leftLines = leftTextarea.value.split('\n');
-        const rightLines = rightTextarea.value.split('\n');
-        
-        // Get selected line in left textarea
-        const cursorPosition = leftTextarea.selectionStart;
-        const leftText = leftTextarea.value;
-        let currentPosition = 0;
-        let selectedLineIndex = 0;
-        
-        for (let i = 0; i < leftLines.length; i++) {
-            currentPosition += leftLines[i].length + 1; // +1 for newline
-            if (currentPosition > cursorPosition) {
-                selectedLineIndex = i;
-                break;
-            }
-        }
-        
-        // Move selected line from left to right
-        const selectedLine = leftLines[selectedLineIndex];
+        const idx = getSelectedLine(leftTextarea);
+        const selectedLine = leftLines[idx];
         if (selectedLine !== undefined) {
-            const newRightLines = [...rightLines];
-            newRightLines[selectedLineIndex] = selectedLine;
+            const newRightLines = rightTextarea.value.split('\n');
+            newRightLines[idx] = selectedLine;
             rightTextarea.value = newRightLines.join('\n');
             updateLineNumbers();
             compareTextDiff();
@@ -294,18 +433,14 @@ function setupEventListeners() {
     // Close modal when clicking outside
     window.addEventListener('click', (e) => {
         if (e.target === elements.importModal) {
-            elements.importModal.style.display = 'none';
+            hide(elements.importModal);
         }
     });
 }
 
 // Setup default headers
 function setupDefaultHeaders() {
-    const defaultHeaders = [
-        { name: 'Content-Type', value: 'application/json' }
-    ];
-    
-    defaultHeaders.forEach(header => {
+    DEFAULT_HEADERS.forEach(header => {
         const headerItem = createHeaderItem();
         headerItem.querySelector('.header-name').value = header.name;
         headerItem.querySelector('.header-value').value = header.value;
@@ -315,38 +450,18 @@ function setupDefaultHeaders() {
 
 // Create a new header item
 function createHeaderItem() {
-    const headerItem = document.createElement('div');
-    headerItem.className = 'header-item';
-    headerItem.innerHTML = `
-        <input type="text" class="header-name" placeholder="Key">
-        <input type="text" class="header-value" placeholder="Value">
-        <button class="remove-header">×</button>
-    `;
-    
-    // Add event listener for remove button
-    headerItem.querySelector('.remove-header').addEventListener('click', () => {
-        headerItem.remove();
-    });
-    
-    return headerItem;
+    return createInputRow('header-item', [
+        { className: 'header-name', placeholder: 'Key' },
+        { className: 'header-value', placeholder: 'Value' }
+    ]);
 }
 
 // Create a new param item
 function createParamItem(name = '', value = '') {
-    const paramItem = document.createElement('div');
-    paramItem.className = 'param-item';
-    paramItem.innerHTML = `
-        <input type="text" class="param-name" placeholder="Key" value="${name}">
-        <input type="text" class="param-value" placeholder="Value" value="${value}">
-        <button class="remove-param">×</button>
-    `;
-    
-    // Add event listener for remove button
-    paramItem.querySelector('.remove-param').addEventListener('click', () => {
-        paramItem.remove();
-    });
-    
-    return paramItem;
+    return createInputRow('param-item', [
+        { className: 'param-name', placeholder: 'Key', value: name },
+        { className: 'param-value', placeholder: 'Value', value: value }
+    ]);
 }
 
 // Add a new param
@@ -385,21 +500,7 @@ function addHeader() {
 
 // Switch between tabs
 function switchTab(tabName) {
-    // Update tab buttons
-    elements.tabButtons.forEach(button => {
-        button.classList.remove('active');
-        if (button.dataset.tab === tabName) {
-            button.classList.add('active');
-        }
-    });
-    
-    // Update tab contents
-    elements.tabContents.forEach(content => {
-        content.classList.remove('active');
-        if (content.id === `${tabName}-content`) {
-            content.classList.add('active');
-        }
-    });
+    toggleView(elements.tabButtons, elements.tabContents, tabName);
 }
 
 // Send HTTP request
@@ -412,40 +513,14 @@ async function sendHttpRequest() {
         return;
     }
     
-    // Get headers
-    const headers = {};
-    const headerItems = elements.headersList.querySelectorAll('.header-item');
-    headerItems.forEach(item => {
-        const name = item.querySelector('.header-name').value;
-        const value = item.querySelector('.header-value').value;
-        if (name && value) {
-            headers[name] = value;
-        }
-    });
+    const headers = collectHeaders();
     
-    // Get params and build query string
-    const paramItems = elements.paramsList.querySelectorAll('.param-item');
-    const params = new URLSearchParams();
-    let hasParams = false;
-    
-    paramItems.forEach(item => {
-        const name = item.querySelector('.param-name').value;
-        const value = item.querySelector('.param-value').value;
-        if (name) {
-            params.append(name, value);
-            hasParams = true;
-        }
-    });
-    
-    // Add params to URL
-    if (hasParams) {
+    const params = collectParams();
+    const paramEntries = Object.entries(params);
+    if (paramEntries.length > 0) {
         const urlObj = new URL(url);
-        // Clear existing search params
         urlObj.search = '';
-        // Add only the params from the UI
-        params.forEach((value, key) => {
-            urlObj.searchParams.append(key, value);
-        });
+        paramEntries.forEach(([key, value]) => urlObj.searchParams.append(key, value));
         url = urlObj.toString();
     }
     
@@ -496,7 +571,7 @@ async function sendHttpRequest() {
     
     // Create AbortController for timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
     
     try {
         console.log(headers)
@@ -562,48 +637,9 @@ async function sendHttpRequest() {
 }
 
 function isDownloadableResponse(contentType, contentDisposition, url) {
-    const downloadableTypes = [
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        'application/msword',
-        'application/vnd.ms-excel',
-        'application/vnd.ms-powerpoint',
-        'text/csv',
-        'application/pdf',
-        'application/zip',
-        'application/octet-stream',
-        'application/x-msdownload',
-        'application/x-tar',
-        'application/gzip',
-        'image/png',
-        'image/jpeg',
-        'image/gif',
-        'image/svg+xml',
-        'image/webp',
-        'audio/mpeg',
-        'audio/wav',
-        'video/mp4'
-    ];
-
-    if (downloadableTypes.some(t => contentType.toLowerCase().includes(t))) {
-        return true;
-    }
-
-    if (contentDisposition.includes('attachment')) {
-        return true;
-    }
-
-    const urlLower = url.toLowerCase();
-    const downloadableExtensions = [
-        '.doc', '.docx', '.xls', '.xlsx', '.csv', '.ppt', '.pptx',
-        '.pdf', '.zip', '.tar', '.gz', '.rar', '.7z',
-        '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp',
-        '.mp3', '.wav', '.ogg', '.flac',
-        '.mp4', '.avi', '.mov', '.wmv',
-        '.exe', '.msi', '.dmg'
-    ];
-    return downloadableExtensions.some(ext => urlLower.endsWith(ext));
+    if (DOWNLOADABLE_MIME_TYPES.some(t => contentType.toLowerCase().includes(t))) return true;
+    if (contentDisposition.includes('attachment')) return true;
+    return DOWNLOADABLE_EXTENSIONS.some(ext => url.toLowerCase().endsWith(ext));
 }
 
 async function downloadResponse(response, url, contentDisposition) {
@@ -676,7 +712,7 @@ function importCurl() {
         }
         
         // Close modal
-        elements.importModal.style.display = 'none';
+        hide(elements.importModal);
         elements.curlInput.value = '';
         
         alert('cURL command imported successfully!');
@@ -697,15 +733,7 @@ function exportCurl() {
     }
     
     // Get headers
-    const headers = {};
-    const headerItems = elements.headersList.querySelectorAll('.header-item');
-    headerItems.forEach(item => {
-        const name = item.querySelector('.header-name').value;
-        const value = item.querySelector('.header-value').value;
-        if (name && value) {
-            headers[name] = value;
-        }
-    });
+    const headers = collectHeaders();
     
     // Get request body
     const body = elements.requestBody.value;
@@ -724,11 +752,7 @@ function exportCurl() {
     }
     
     // Copy to clipboard
-    navigator.clipboard.writeText(curlCommand).then(() => {
-        alert('cURL command copied to clipboard!');
-    }).catch(err => {
-        alert('Failed to copy cURL command: ', err);
-    });
+    copyToClipboard(curlCommand).then(() => alert('cURL command copied to clipboard!'));
 }
 
 // Beautify JSON function
@@ -852,9 +876,9 @@ function beautifyJsonTool() {
         }
         const parsed = JSON.parse(input);
         updateTreeView(parsed);
-        elements.jsonOutput.style.display = 'none';
-        elements.jsonTree.style.display = 'block';
-        elements.javaOutput.style.display = 'none';
+        hide(elements.jsonOutput);
+        show(elements.jsonTree);
+        hide(elements.javaOutput);
     } catch (error) {
         console.error('Error beautifying JSON:', error);
     }
@@ -871,9 +895,9 @@ function minifyJsonTool() {
         const minified = JSON.stringify(parsed);
         elements.jsonOutput.value = minified;
         updateTreeView(parsed);
-        elements.jsonOutput.style.display = 'block';
-        elements.jsonTree.style.display = 'none';
-        elements.javaOutput.style.display = 'none';
+        show(elements.jsonOutput);
+        hide(elements.jsonTree);
+        hide(elements.javaOutput);
     } catch (error) {
         console.error('Error minifying JSON:', error);
     }
@@ -888,284 +912,134 @@ function updateTreeView(data) {
     elements.jsonTree.appendChild(tree);
 }
 
+function createCollapseToggle() {
+    const collapse = document.createElement('span');
+    collapse.className = 'collapse';
+    collapse.textContent = '▼';
+    collapse.addEventListener('click', function() {
+        const childUl = this.parentElement.querySelector('ul');
+        if (childUl) {
+            const hidden = childUl.style.display === 'none';
+            childUl.style.display = hidden ? 'block' : 'none';
+            this.textContent = hidden ? '▼' : '▶';
+        }
+    });
+    return collapse;
+}
+
+function createValueSpan(value) {
+    const span = document.createElement('span');
+    span.className = typeof value === 'string' ? 'string' : typeof value === 'number' ? 'number' : value === null ? 'null' : 'boolean';
+    span.textContent = typeof value === 'string' ? `"${value}"` : String(value);
+    return span;
+}
+
 // Build Tree function
 function buildTree(data, path = []) {
     const ul = document.createElement('ul');
-    
-    if (Array.isArray(data)) {
-        const li = document.createElement('li');
-        const collapse = document.createElement('span');
-        collapse.className = 'collapse';
-        collapse.textContent = '▼';
-        collapse.addEventListener('click', () => {
-            const childUl = li.querySelector('ul');
-            if (childUl) {
-                if (childUl.style.display === 'none') {
-                    childUl.style.display = 'block';
-                    collapse.textContent = '▼';
-                } else {
-                    childUl.style.display = 'none';
-                    collapse.textContent = '▶';
-                }
-            }
-        });
-        li.appendChild(collapse);
-        
-        const bracket = document.createElement('span');
-        bracket.className = 'bracket';
-        bracket.textContent = '[';
-        li.appendChild(bracket);
-        
-        const childUl = document.createElement('ul');
-        data.forEach((item, index) => {
-            const itemLi = document.createElement('li');
-            if (typeof item === 'object' && item !== null) {
-                const itemCollapse = document.createElement('span');
-                itemCollapse.className = 'collapse';
-                itemCollapse.textContent = '▼';
-                itemCollapse.addEventListener('click', () => {
-                    const itemChildUl = itemLi.querySelector('ul');
-                    if (itemChildUl) {
-                        if (itemChildUl.style.display === 'none') {
-                            itemChildUl.style.display = 'block';
-                            itemCollapse.textContent = '▼';
-                        } else {
-                            itemChildUl.style.display = 'none';
-                            itemCollapse.textContent = '▶';
-                        }
-                    }
-                });
-                itemLi.appendChild(itemCollapse);
-                const itemTree = buildTree(item, [...path, index]);
-                itemLi.appendChild(itemTree);
-            } else {
-                const valueSpan = document.createElement('span');
-                if (typeof item === 'string') {
-                    valueSpan.className = 'string';
-                    valueSpan.textContent = `"${item}"`;
-                } else if (typeof item === 'number') {
-                    valueSpan.className = 'number';
-                    valueSpan.textContent = item;
-                } else if (typeof item === 'boolean') {
-                    valueSpan.className = 'boolean';
-                    valueSpan.textContent = item;
-                } else if (item === null) {
-                    valueSpan.className = 'null';
-                    valueSpan.textContent = 'null';
-                }
-                itemLi.appendChild(valueSpan);
-                
-                // Add double click event listener for editing
-                valueSpan.addEventListener('dblclick', () => {
-                    editNode(item, [...path, index]);
-                });
-            }
-            if (index < data.length - 1) {
-                const comma = document.createElement('span');
-                comma.className = 'comma';
-                comma.textContent = ',';
-                itemLi.appendChild(comma);
-            }
-            childUl.appendChild(itemLi);
-        });
-        li.appendChild(childUl);
-        
-        const closingBracket = document.createElement('li');
-        const bracketSpan = document.createElement('span');
-        bracketSpan.className = 'bracket';
-        bracketSpan.textContent = ']';
-        closingBracket.appendChild(bracketSpan);
-        li.appendChild(closingBracket);
-        
-        ul.appendChild(li);
-    } else if (typeof data === 'object' && data !== null) {
-        const li = document.createElement('li');
-        const collapse = document.createElement('span');
-        collapse.className = 'collapse';
-        collapse.textContent = '▼';
-        collapse.addEventListener('click', () => {
-            const childUl = li.querySelector('ul');
-            if (childUl) {
-                if (childUl.style.display === 'none') {
-                    childUl.style.display = 'block';
-                    collapse.textContent = '▼';
-                } else {
-                    childUl.style.display = 'none';
-                    collapse.textContent = '▶';
-                }
-            }
-        });
-        li.appendChild(collapse);
-        
-        const bracket = document.createElement('span');
-        bracket.className = 'bracket';
-        bracket.textContent = '{';
-        li.appendChild(bracket);
-        
-        const childUl = document.createElement('ul');
-        const entries = Object.entries(data);
-        entries.forEach(([key, value], index) => {
-            const itemLi = document.createElement('li');
-            const keySpan = document.createElement('span');
-            keySpan.className = 'key';
-            keySpan.textContent = `"${key}": `;
-            itemLi.appendChild(keySpan);
-            
-            // Add double click event listener for editing value
-            keySpan.addEventListener('dblclick', () => {
-                editNode(value, [...path, key]);
-            });
-            
-            if (typeof value === 'object' && value !== null) {
-                const itemCollapse = document.createElement('span');
-                itemCollapse.className = 'collapse';
-                itemCollapse.textContent = '▼';
-                itemCollapse.addEventListener('click', () => {
-                    const itemChildUl = itemLi.querySelector('ul');
-                    if (itemChildUl) {
-                        if (itemChildUl.style.display === 'none') {
-                            itemChildUl.style.display = 'block';
-                            itemCollapse.textContent = '▼';
-                        } else {
-                            itemChildUl.style.display = 'none';
-                            itemCollapse.textContent = '▶';
-                        }
-                    }
-                });
-                itemLi.appendChild(itemCollapse);
-                const itemTree = buildTree(value, [...path, key]);
-                itemLi.appendChild(itemTree);
-            } else {
-                const valueSpan = document.createElement('span');
-                if (typeof value === 'string') {
-                    valueSpan.className = 'string';
-                    valueSpan.textContent = `"${value}"`;
-                } else if (typeof value === 'number') {
-                    valueSpan.className = 'number';
-                    valueSpan.textContent = value;
-                } else if (typeof value === 'boolean') {
-                    valueSpan.className = 'boolean';
-                    valueSpan.textContent = value;
-                } else if (value === null) {
-                    valueSpan.className = 'null';
-                    valueSpan.textContent = 'null';
-                }
-                itemLi.appendChild(valueSpan);
-                
-                // Add double click event listener for editing value
-                valueSpan.addEventListener('dblclick', () => {
-                    editNode(value, [...path, key]);
-                });
-            }
-            if (index < entries.length - 1) {
-                const comma = document.createElement('span');
-                comma.className = 'comma';
-                comma.textContent = ',';
-                itemLi.appendChild(comma);
-            }
-            childUl.appendChild(itemLi);
-        });
-        li.appendChild(childUl);
-        
-        const closingBracket = document.createElement('li');
-        const bracketSpan = document.createElement('span');
-        bracketSpan.className = 'bracket';
-        bracketSpan.textContent = '}';
-        closingBracket.appendChild(bracketSpan);
-        li.appendChild(closingBracket);
-        
-        ul.appendChild(li);
-    }
-    
+    const bracket = Array.isArray(data) ? '[' : '{';
+    const closeBracket = Array.isArray(data) ? ']' : '}';
+    const entries = Array.isArray(data) ? data.map((v, i) => [i, v]) : Object.entries(data);
+
+    const li = document.createElement('li');
+    const collapse = createCollapseToggle();
+    li.appendChild(collapse);
+
+    const bracketSpan = document.createElement('span');
+    bracketSpan.className = 'bracket';
+    bracketSpan.textContent = bracket;
+    li.appendChild(bracketSpan);
+
+    const childUl = document.createElement('ul');
+    entries.forEach(([key, value], index) => {
+        const itemLi = document.createElement('li');
+        const keySpan = document.createElement('span');
+        keySpan.className = 'key';
+        keySpan.textContent = Array.isArray(data) ? '' : `"${key}": `;
+        itemLi.appendChild(keySpan);
+
+        const editPath = [...path, key];
+        keySpan.addEventListener('dblclick', () => editNode(value, editPath));
+
+        if (typeof value === 'object' && value !== null) {
+            const itemCollapse = createCollapseToggle();
+            itemLi.appendChild(itemCollapse);
+            itemLi.appendChild(buildTree(value, editPath));
+        } else {
+            const valueSpan = createValueSpan(value);
+            itemLi.appendChild(valueSpan);
+            valueSpan.addEventListener('dblclick', () => editNode(value, editPath));
+        }
+        if (index < entries.length - 1) {
+            const comma = document.createElement('span');
+            comma.className = 'comma';
+            comma.textContent = ',';
+            itemLi.appendChild(comma);
+        }
+        childUl.appendChild(itemLi);
+    });
+    li.appendChild(childUl);
+
+    const closingLi = document.createElement('li');
+    const cbSpan = document.createElement('span');
+    cbSpan.className = 'bracket';
+    cbSpan.textContent = closeBracket;
+    closingLi.appendChild(cbSpan);
+    li.appendChild(closingLi);
+    ul.appendChild(li);
+
     return ul;
 }
 
 // Edit node function
 function editNode(value, path) {
-    // Create edit modal
     const modal = document.createElement('div');
-    modal.style.position = 'fixed';
-    modal.style.top = '0';
-    modal.style.left = '0';
-    modal.style.width = '100%';
-    modal.style.height = '100%';
-    modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-    modal.style.display = 'flex';
-    modal.style.justifyContent = 'center';
-    modal.style.alignItems = 'center';
-    modal.style.zIndex = '1000';
-    
+    Object.assign(modal.style, {
+        position: 'fixed', top: '0', left: '0', width: '100%', height: '100%',
+        backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center',
+        alignItems: 'center', zIndex: '1000'
+    });
+
     const modalContent = document.createElement('div');
-    modalContent.style.backgroundColor = 'white';
-    modalContent.style.padding = '20px';
-    modalContent.style.borderRadius = '8px';
-    modalContent.style.minWidth = '400px';
-    modalContent.style.maxWidth = '80%';
-    modalContent.style.maxHeight = '80%';
-    modalContent.style.overflow = 'auto';
-    
+    Object.assign(modalContent.style, {
+        backgroundColor: 'white', padding: '20px', borderRadius: '8px',
+        minWidth: '400px', maxWidth: '80%', maxHeight: '80%', overflow: 'auto'
+    });
+
     const modalTitle = document.createElement('h3');
     modalTitle.textContent = 'Edit Value';
     modalContent.appendChild(modalTitle);
-    
-    let inputElement;
-    if (typeof value === 'object' && value !== null) {
-        // For objects and arrays, use a textarea with formatted JSON
-        inputElement = document.createElement('textarea');
+
+    const isObject = typeof value === 'object' && value !== null;
+    const inputElement = isObject ? document.createElement('textarea') : document.createElement('input');
+    if (isObject) {
         inputElement.value = JSON.stringify(value, null, 2);
-        inputElement.style.width = '100%';
-        inputElement.style.height = '300px';
-        inputElement.style.padding = '10px';
-        inputElement.style.margin = '10px 0';
-        inputElement.style.border = '1px solid #ddd';
-        inputElement.style.borderRadius = '4px';
-        inputElement.style.fontFamily = 'monospace';
-        inputElement.style.fontSize = '14px';
+        Object.assign(inputElement.style, { width: '100%', height: '300px', padding: '10px', margin: '10px 0', border: '1px solid #ddd', borderRadius: '4px', fontFamily: 'monospace', fontSize: '14px' });
     } else {
-        // For simple types, use an input
-        inputElement = document.createElement('input');
         inputElement.type = 'text';
         inputElement.value = typeof value === 'string' ? value : String(value);
-        inputElement.style.width = '100%';
-        inputElement.style.padding = '10px';
-        inputElement.style.margin = '10px 0';
-        inputElement.style.border = '1px solid #ddd';
-        inputElement.style.borderRadius = '4px';
+        Object.assign(inputElement.style, { width: '100%', padding: '10px', margin: '10px 0', border: '1px solid #ddd', borderRadius: '4px' });
     }
     modalContent.appendChild(inputElement);
-    
+
     const buttonContainer = document.createElement('div');
-    buttonContainer.style.display = 'flex';
-    buttonContainer.style.justifyContent = 'flex-end';
-    buttonContainer.style.gap = '10px';
-    
+    Object.assign(buttonContainer.style, { display: 'flex', justifyContent: 'flex-end', gap: '10px' });
+
     const cancelButton = document.createElement('button');
     cancelButton.textContent = 'Cancel';
-    cancelButton.style.padding = '8px 16px';
-    cancelButton.style.backgroundColor = '#f0f0f0';
-    cancelButton.style.border = 'none';
-    cancelButton.style.borderRadius = '4px';
-    cancelButton.style.cursor = 'pointer';
-    cancelButton.addEventListener('click', () => {
-        document.body.removeChild(modal);
-    });
+    Object.assign(cancelButton.style, { padding: '8px 16px', backgroundColor: '#f0f0f0', border: 'none', borderRadius: '4px', cursor: 'pointer' });
+    cancelButton.addEventListener('click', () => document.body.removeChild(modal));
     buttonContainer.appendChild(cancelButton);
-    
+
     const saveButton = document.createElement('button');
     saveButton.textContent = 'Save';
-    saveButton.style.padding = '8px 16px';
-    saveButton.style.backgroundColor = '#4CAF50';
-    saveButton.style.color = 'white';
-    saveButton.style.border = 'none';
-    saveButton.style.borderRadius = '4px';
-    saveButton.style.cursor = 'pointer';
+    Object.assign(saveButton.style, { padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' });
     saveButton.addEventListener('click', () => {
-        const newValue = inputElement.value;
-        updateNodeValue(newValue, path);
+        updateNodeValue(inputElement.value, path);
         document.body.removeChild(modal);
     });
     buttonContainer.appendChild(saveButton);
-    
+
     modalContent.appendChild(buttonContainer);
     modal.appendChild(modalContent);
     document.body.appendChild(modal);
@@ -1231,16 +1105,9 @@ function updateNodeValue(newValue, path) {
 function copyJsonOutput() {
     try {
         const input = elements.jsonInput.value.trim();
-        if (!input) {
-            return;
-        }
+        if (!input) return;
         const parsed = JSON.parse(input);
-        const beautified = JSON.stringify(parsed, null, 2);
-        navigator.clipboard.writeText(beautified).then(() => {
-            console.log('Copied to clipboard!');
-        }).catch(err => {
-            console.error('Error copying to clipboard:', err);
-        });
+        copyToClipboard(JSON.stringify(parsed, null, 2));
     } catch (error) {
         console.error('Error copying to clipboard:', error);
     }
@@ -1273,9 +1140,9 @@ function jsonToJavaDto() {
 
         const code = generateJavaDto(parsed, className);
         elements.javaOutput.value = code;
-        elements.javaOutput.style.display = 'block';
-        elements.jsonOutput.style.display = 'none';
-        elements.jsonTree.style.display = 'none';
+        show(elements.javaOutput);
+        hide(elements.jsonOutput);
+        hide(elements.jsonTree);
     } catch (error) {
         alert('Invalid JSON: ' + error.message);
     }
@@ -1291,9 +1158,9 @@ function javaDtoToJson() {
 
         const jsonStr = JSON.stringify(json, null, 2);
         elements.jsonOutput.value = jsonStr;
-        elements.jsonOutput.style.display = 'block';
-        elements.jsonTree.style.display = 'block';
-        elements.javaOutput.style.display = 'none';
+        show(elements.jsonOutput);
+        show(elements.jsonTree);
+        hide(elements.javaOutput);
         updateTreeView(json);
     } catch (error) {
         alert('Failed to parse Java DTO: ' + error.message);
@@ -1415,58 +1282,404 @@ function generateSampleJson(parsed) {
 
 function randomValueForType(type) {
     type = type.trim();
-
-    if (type === 'String' || type === 'java.lang.String') {
-        const samples = ['example', 'hello', 'test_value', 'sample_text', 'lorem', 'ipsum'];
-        return samples[Math.floor(Math.random() * samples.length)];
-    } else if (type === 'Integer' || type === 'int' || type === 'java.lang.Integer') {
-        return Math.floor(Math.random() * 1000);
-    } else if (type === 'Long' || type === 'long' || type === 'java.lang.Long') {
-        return Math.floor(Math.random() * 100000) + 1000000000;
-    } else if (type === 'Double' || type === 'double' || type === 'java.lang.Double') {
-        return Math.round(Math.random() * 10000) / 100;
-    } else if (type === 'Float' || type === 'float' || type === 'java.lang.Float') {
-        return parseFloat((Math.random() * 100).toFixed(2));
-    } else if (type === 'Boolean' || type === 'boolean' || type === 'java.lang.Boolean') {
-        return Math.random() > 0.5;
-    } else if (type === 'BigDecimal' || type === 'java.math.BigDecimal') {
-        return (Math.random() * 10000).toFixed(2);
-    } else if (type.startsWith('List<') || type.startsWith('java.util.List<')) {
-        const innerType = type.match(/List<(.+)>/);
-        if (innerType) {
-            const count = Math.floor(Math.random() * 3) + 1;
-            const arr = [];
-            for (let i = 0; i < count; i++) {
-                arr.push(randomValueForType(innerType[1]));
-            }
-            return arr;
-        }
-        return [];
-    } else if (type.startsWith('Map<') || type.startsWith('java.util.Map<')) {
-        const mapMatch = type.match(/Map<(.+),\s*(.+)>/);
-        if (mapMatch) {
-            const obj = {};
-            const key = randomValueForType(mapMatch[1]);
-            obj[key] = randomValueForType(mapMatch[2]);
-            return obj;
-        }
-        return {};
-    } else if (type === 'Date' || type === 'java.util.Date') {
-        return '2025-01-01 00:00:00';
-    } else if (type === 'LocalDateTime' || type === 'java.time.LocalDateTime') {
-        return '2025-01-01T00:00:00';
-    } else if (type === 'LocalDate' || type === 'java.time.LocalDate') {
-        return '2025-01-01';
-    } else if (type === 'LocalTime' || type === 'java.time.LocalTime') {
-        return '00:00:00';
-    } else if (type === 'Instant' || type === 'java.time.Instant') {
-        return '2025-01-01T00:00:00Z';
-    } else if (type === 'byte[]') {
-        return 'Ynl0ZQ==';
-    } else if (type === 'Object' || type === 'java.lang.Object') {
-        return 'value';
+    const handlers = {
+        'String': () => ['example', 'hello', 'test_value', 'sample_text', 'lorem', 'ipsum'][Math.floor(Math.random() * 6)],
+        'java.lang.String': () => handlers['String'](),
+        'Integer': () => Math.floor(Math.random() * 1000),
+        'int': () => handlers['Integer'](),
+        'java.lang.Integer': () => handlers['Integer'](),
+        'Long': () => Math.floor(Math.random() * 100000) + 1000000000,
+        'long': () => handlers['Long'](),
+        'java.lang.Long': () => handlers['Long'](),
+        'Double': () => Math.round(Math.random() * 10000) / 100,
+        'double': () => handlers['Double'](),
+        'java.lang.Double': () => handlers['Double'](),
+        'Float': () => parseFloat((Math.random() * 100).toFixed(2)),
+        'float': () => handlers['Float'](),
+        'java.lang.Float': () => handlers['Float'](),
+        'Boolean': () => Math.random() > 0.5,
+        'boolean': () => handlers['Boolean'](),
+        'java.lang.Boolean': () => handlers['Boolean'](),
+        'BigDecimal': () => (Math.random() * 10000).toFixed(2),
+        'java.math.BigDecimal': () => handlers['BigDecimal'](),
+        'Date': () => '2025-01-01 00:00:00',
+        'java.util.Date': () => handlers['Date'](),
+        'LocalDateTime': () => '2025-01-01T00:00:00',
+        'java.time.LocalDateTime': () => handlers['LocalDateTime'](),
+        'LocalDate': () => '2025-01-01',
+        'java.time.LocalDate': () => handlers['LocalDate'](),
+        'LocalTime': () => '00:00:00',
+        'java.time.LocalTime': () => handlers['LocalTime'](),
+        'Instant': () => '2025-01-01T00:00:00Z',
+        'java.time.Instant': () => handlers['Instant'](),
+        'byte[]': () => 'Ynl0ZQ==',
+        'Object': () => 'value',
+        'java.lang.Object': () => handlers['Object']()
+    };
+    if (type in handlers) return handlers[type]();
+    const listMatch = type.match(/^(?:java\.util\.)?List<(.+)>/);
+    if (listMatch) {
+        const count = Math.floor(Math.random() * 3) + 1;
+        return Array.from({length: count}, () => randomValueForType(listMatch[1]));
+    }
+    const mapMatch = type.match(/^(?:java\.util\.)?Map<(.+),\s*(.+)>/);
+    if (mapMatch) {
+        const obj = {};
+        obj[randomValueForType(mapMatch[1])] = randomValueForType(mapMatch[2]);
+        return obj;
     }
     return 'value';
+}
+
+// ==================== SQL to Entity ====================
+
+const SQL_TYPE_MAP = {
+    'VARCHAR': 'String', 'CHAR': 'String', 'TEXT': 'String', 'LONGTEXT': 'String',
+    'MEDIUMTEXT': 'String', 'TINYTEXT': 'String', 'NVARCHAR': 'String', 'NCHAR': 'String',
+    'INT': 'Integer', 'INTEGER': 'Integer', 'TINYINT': 'Integer', 'SMALLINT': 'Integer',
+    'MEDIUMINT': 'Integer', 'YEAR': 'Integer',
+    'BIGINT': 'Long', 'BIGSERIAL': 'Long', 'SERIAL8': 'Long',
+    'FLOAT': 'Float', 'REAL': 'Float',
+    'DOUBLE': 'Double', 'DOUBLE PRECISION': 'Double',
+    'DECIMAL': 'BigDecimal', 'NUMERIC': 'BigDecimal', 'NUMBER': 'BigDecimal',
+    'BOOLEAN': 'Boolean', 'BOOL': 'Boolean', 'BIT': 'Boolean',
+    'DATE': 'LocalDate', 'DATETIME': 'LocalDateTime', 'TIMESTAMP': 'LocalDateTime',
+    'TIME': 'LocalTime', 'DATETIME2': 'LocalDateTime', 'SMALLDATETIME': 'LocalDateTime',
+    'BLOB': 'byte[]', 'LONGBLOB': 'byte[]', 'MEDIUMBLOB': 'byte[]', 'TINYBLOB': 'byte[]',
+    'BINARY': 'byte[]', 'VARBINARY': 'byte[]',
+    'JSON': 'String', 'JSONB': 'String', 'XML': 'String',
+    'ENUM': 'String', 'SET': 'String',
+    'UUID': 'String', 'GUID': 'String',
+    'GEOMETRY': 'String', 'POINT': 'String', 'LINESTRING': 'String', 'POLYGON': 'String',
+    'SERIAL': 'Integer', 'IDENTITY': 'Long',
+    'ROWVERSION': 'byte[]', 'UNIQUEIDENTIFIER': 'String',
+    'MONEY': 'BigDecimal', 'SMALLMONEY': 'BigDecimal',
+    'INTERVAL': 'String',
+    'ARRAY': 'String',
+    'CURSOR': 'String',
+    'IMAGE': 'byte[]',
+    'NTEXT': 'String',
+    'SQL_VARIANT': 'String',
+    'SYSNAME': 'String',
+    'HIERARCHYID': 'String'
+};
+
+function resolveSqlType(sqlType) {
+    const upper = sqlType.toUpperCase().replace(/\s*\(.*\)/, '').trim();
+    return SQL_TYPE_MAP[upper] || 'String';
+}
+
+function needsImport(javaType) {
+    return ['BigDecimal', 'LocalDate', 'LocalDateTime', 'LocalTime'].includes(javaType);
+}
+
+function getImportForType(javaType) {
+    const map = {
+        'BigDecimal': 'java.math.BigDecimal',
+        'LocalDate': 'java.time.LocalDate',
+        'LocalDateTime': 'java.time.LocalDateTime',
+        'LocalTime': 'java.time.LocalTime'
+    };
+    return map[javaType] || null;
+}
+
+function parseCreateTable(sql) {
+    sql = sql.trim().replace(/\/\*[\s\S]*?\*\//g, '').replace(/--.*$/gm, '');
+    // Extract table name: CREATE TABLE [IF NOT EXISTS] [`schema`.]`table_name`
+    const nameMatch = sql.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"']?(\w+)[`"']?(?:\.\s*[`"']?(\w+)[`"']?)?/i);
+    if (!nameMatch) return null;
+    const tableName = nameMatch[2] || nameMatch[1];
+    // Find the opening paren after the table name
+    let parenStart = sql.indexOf('(', nameMatch.index + nameMatch[0].length);
+    // Fallback: if no paren found immediately after, search from start
+    if (parenStart === -1) parenStart = sql.indexOf('(');
+    if (parenStart === -1) return null;
+    // Find matching closing paren by tracking depth
+    let depth = 0;
+    let parenEnd = -1;
+    for (let i = parenStart; i < sql.length; i++) {
+        if (sql[i] === '(') depth++;
+        if (sql[i] === ')') {
+            depth--;
+            if (depth === 0) { parenEnd = i; break; }
+        }
+    }
+    if (parenEnd === -1) return null;
+    const bodyText = sql.substring(parenStart + 1, parenEnd);
+    const columns = [];
+    const lines = splitSqlColumns(bodyText);
+    let primaryKey = '';
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (/^(PRIMARY\s+KEY|UNIQUE\s+KEY|KEY|INDEX|FULLTEXT|SPATIAL|CONSTRAINT|CHECK|FOREIGN\s+KEY)/i.test(trimmed)) {
+            if (/^PRIMARY\s+KEY\s*\(`?"?(\w+)`?"?\)/i.test(trimmed)) {
+                const pkMatch = trimmed.match(/^PRIMARY\s+KEY\s*\(`?"?(\w+)`?"?\)/i);
+                if (pkMatch && !primaryKey) primaryKey = pkMatch[1];
+            }
+            continue;
+        }
+        const col = parseColumnDef(trimmed);
+        if (col) {
+            if (col.isPrimaryKey) primaryKey = col.name;
+            columns.push(col);
+        }
+    }
+    return {
+        tableName: capitalize(toCamelCase(tableName)),
+        originalTableName: tableName,
+        columns, primaryKey,
+        tableComment: parseTableComment(sql, parenEnd)
+    };
+}
+
+function parseTableComment(sql, parenEnd) {
+    const afterParen = sql.substring(parenEnd + 1);
+    const match = afterParen.match(/COMMENT\s*=\s*'((?:[^'\\]|\\.)*)'/i);
+    if (match) return match[1].replace(/\\'/g, "'");
+    return '';
+}
+
+function splitSqlColumns(bodyText) {
+    const lines = [];
+    let current = '';
+    let depth = 0;
+    let inString = false;
+    let stringChar = '';
+    for (let i = 0; i < bodyText.length; i++) {
+        const ch = bodyText[i];
+        if (inString) {
+            if (ch === '\\' && i + 1 < bodyText.length) {
+                current += ch + bodyText[i + 1];
+                i++;
+                continue;
+            }
+            if (ch === stringChar) {
+                inString = false;
+            }
+            current += ch;
+            continue;
+        }
+        if (ch === '(') depth++;
+        if (ch === ')') depth--;
+        if (ch === ',' && depth === 0) {
+            lines.push(current);
+            current = '';
+        } else {
+            current += ch;
+            if (ch === "'" || ch === '"') {
+                inString = true;
+                stringChar = ch;
+            }
+        }
+    }
+    if (current.trim()) lines.push(current);
+    return lines;
+}
+
+function parseColumnDef(line) {
+    const match = line.match(/^`?"?(\w+)`?"?\s+(\w+)\s*(\([^)]*\))?\s*(.*)$/i);
+    if (!match) return null;
+    const name = match[1];
+    const sqlType = match[2] + (match[3] || '');
+    const rest = (match[4] || '').toUpperCase().trim();
+    const javaType = resolveSqlType(sqlType);
+    const column = {
+        name: toCamelCase(name),
+        originalName: name,
+        sqlType: sqlType.toUpperCase(),
+        javaType: javaType,
+        nullable: !rest.includes('NOT NULL'),
+        isPrimaryKey: rest.includes('PRIMARY KEY'),
+        isAutoIncrement: rest.includes('AUTO_INCREMENT') || rest.includes('AUTOINCREMENT') || rest.includes('IDENTITY'),
+        defaultValue: parseDefaultValue(rest),
+        comment: parseComment(rest),
+        enumValues: extractEnumValues(sqlType)
+    };
+    return column;
+}
+
+function parseDefaultValue(rest) {
+    const match = rest.match(/DEFAULT\s+('(?:[^'\\]|\\.)*'|[^\s,]+)/i);
+    if (match) {
+        const val = match[1].replace(/^'|'$/g, '');
+        if (/^NULL$/i.test(val)) return null;
+        return val;
+    }
+    return null;
+}
+
+function parseComment(rest) {
+    // Try standard MySQL COMMENT '...' syntax
+    const match = rest.match(/COMMENT\s+'((?:[^'\\]|\\.)*)'/i);
+    if (match) {
+        return match[1].replace(/\\'/g, "'");
+    }
+    // Fallback: try COMMENT "..." (double-quoted)
+    const dmatch = rest.match(/COMMENT\s+"((?:[^"\\]|\\.)*)"/i);
+    if (dmatch) {
+        return dmatch[1].replace(/\\"/g, '"');
+    }
+    return null;
+}
+
+// Split comment into description and enum values (if comment contains enum-like patterns)
+function parseCommentEnum(comment) {
+    if (!comment) return { description: '', enumValues: null };
+    const parts = comment.split(',').map(s => s.trim()).filter(s => s);
+    if (parts.length <= 1) return { description: comment, enumValues: null };
+    // Check if parts after the first contain digits (enum-like pattern like "1正常", "2转账中")
+    const rest = parts.slice(1);
+    const hasEnum = rest.some(p => /\d/.test(p));
+    if (hasEnum) {
+        return { description: parts[0], enumValues: rest };
+    }
+    return { description: comment, enumValues: null };
+}
+
+// Extract enum values from MySQL ENUM type definition like enum('wechat','alipay')
+function extractEnumValues(sqlType) {
+    if (!/^ENUM\s*\(/i.test(sqlType)) return null;
+    const match = sqlType.match(/^ENUM\s*\((.+)\)$/i);
+    if (!match) return null;
+    const content = match[1];
+    const values = [];
+    let inStr = false;
+    let strChar = '';
+    let current = '';
+    for (let i = 0; i < content.length; i++) {
+        const ch = content[i];
+        if (inStr) {
+            if (ch === '\\' && i + 1 < content.length) {
+                current += content[i + 1];
+                i++;
+                continue;
+            }
+            if (ch === strChar) {
+                inStr = false;
+            } else {
+                current += ch;
+            }
+            continue;
+        }
+        if (ch === "'" || ch === '"') {
+            inStr = true;
+            strChar = ch;
+            continue;
+        }
+        if (ch === ',' && !inStr) {
+            if (current.trim()) values.push(current.trim());
+            current = '';
+        }
+    }
+    if (current.trim()) values.push(current.trim());
+    return values.length > 0 ? values : null;
+}
+
+function parseFieldDefinitions(input) {
+    const lines = input.split('\n').filter(l => l.trim());
+    const columns = [];
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || /^(PRIMARY|UNIQUE|KEY|INDEX|CONSTRAINT|FOREIGN|CHECK)/i.test(trimmed)) continue;
+        const match = trimmed.match(/^`?"?(\w+)`?"?\s+(\w+)\s*(\([^)]*\))?\s*(.*)$/i);
+        if (match) {
+            const name = match[1];
+            const sqlType = match[2] + (match[3] || '');
+            const rest = (match[4] || '').toUpperCase().trim();
+            const javaType = resolveSqlType(sqlType);
+            columns.push({
+                name: toCamelCase(name),
+                originalName: name,
+                sqlType: sqlType.toUpperCase(),
+                javaType: javaType,
+                nullable: !rest.includes('NOT NULL'),
+                isPrimaryKey: rest.includes('PRIMARY KEY'),
+                isAutoIncrement: rest.includes('AUTO_INCREMENT') || rest.includes('AUTOINCREMENT') || rest.includes('IDENTITY'),
+                defaultValue: parseDefaultValue(rest),
+                comment: parseComment(rest),
+                enumValues: extractEnumValues(sqlType)
+            });
+        }
+    }
+    return columns;
+}
+
+function generateEntity(tableInfo, packageName) {
+    const columns = tableInfo.columns;
+    const imports = new Set();
+    imports.add('import lombok.Data');
+    imports.add('import lombok.NoArgsConstructor');
+    imports.add('import lombok.AllArgsConstructor');
+    imports.add('import lombok.Builder');
+    imports.add('import com.baomidou.mybatisplus.annotation.TableName');
+    imports.add('import com.baomidou.mybatisplus.annotation.TableField');
+    let hasId = false, hasAuto = false;
+    for (const col of columns) {
+        if (col.isPrimaryKey) {
+            hasId = true;
+            imports.add('import com.baomidou.mybatisplus.annotation.TableId');
+            if (col.isAutoIncrement) { hasAuto = true; imports.add('import com.baomidou.mybatisplus.annotation.IdType'); }
+        }
+        if (needsImport(col.javaType)) {
+            const imp = getImportForType(col.javaType);
+            if (imp) imports.add('import ' + imp);
+        }
+    }
+    let code = 'package ' + packageName + ';\n\n';
+    [...imports].sort().forEach(imp => code += imp + ';\n');
+    code += '\n';
+    if (tableInfo.tableComment) code += '/**\n * ' + tableInfo.tableComment + '\n */\n';
+    code += '@Data\n@NoArgsConstructor\n@AllArgsConstructor\n@Builder\n';
+    code += '@TableName("' + tableInfo.originalTableName + '")\n';
+    code += 'public class ' + tableInfo.tableName + ' {\n';
+    for (const col of columns) {
+        code += buildFieldCommentBlock(col);
+        if (col.isPrimaryKey) {
+            code += col.isAutoIncrement ? '    @TableId(type = IdType.AUTO)\n' : '    @TableId\n';
+        }
+        code += '    @TableField("' + col.originalName + '")\n';
+        code += '    private ' + col.javaType + ' ' + col.name + ';\n';
+    }
+    code += '}\n';
+    return code;
+}
+
+function sqlToEntity() {
+    try {
+        const input = elements.jsonInput.value.trim();
+        if (!input) return;
+        const isCreateTable = /CREATE\s+TABLE/i.test(input);
+        let tableInfo = null;
+        let columns = [];
+        if (isCreateTable) {
+            tableInfo = parseCreateTable(input);
+            if (!tableInfo) {
+                alert('Failed to parse CREATE TABLE statement. Please check the syntax.');
+                return;
+            }
+            columns = tableInfo.columns;
+        } else {
+            columns = parseFieldDefinitions(input);
+            if (columns.length === 0) {
+                alert('No field definitions found. Please enter CREATE TABLE SQL or field definitions like:\n"id BIGINT"\n"name VARCHAR(100)"');
+                return;
+            }
+        }
+        let className = tableInfo ? tableInfo.tableName : 'MyEntity';
+        let packageName = 'com.example.entity';
+        if (!tableInfo) {
+            tableInfo = { columns, tableName: className, originalTableName: className.toLowerCase(), tableComment: '' };
+        }
+        const code = generateEntity(tableInfo, packageName);
+        elements.sqlOutput.value = code;
+        show(elements.sqlOutput);
+        hide(elements.jsonOutput);
+        hide(elements.jsonTree);
+        hide(elements.javaOutput);
+    } catch (error) {
+        alert('Failed to generate entity: ' + error.message);
+    }
 }
 
 function toCamelCase(str) {
@@ -1479,12 +1692,6 @@ function capitalize(str) {
 }
 
 // ==================== IndexedDB + File System Access API ====================
-
-const DB_NAME = 'ToolKitFileDB';
-const DB_VERSION = 1;
-const HANDLE_STORE = 'fileHandles';
-const HANDLE_KEY = 'httpFavoritesHandle';
-const CACHE_KEY = 'httpClientFavorites';
 
 function openFileDB() {
     return new Promise((resolve, reject) => {
@@ -1767,25 +1974,8 @@ async function saveRequest() {
         request.tags = tagsInput.split(',').map(tag => tag.trim()).filter(tag => tag);
     }
     
-    // Get headers
-    const headerItems = elements.headersList.querySelectorAll('.header-item');
-    headerItems.forEach(item => {
-        const name = item.querySelector('.header-name').value;
-        const value = item.querySelector('.header-value').value;
-        if (name && value) {
-            request.headers[name] = value;
-        }
-    });
-    
-    // Get params
-    const paramItems = elements.paramsList.querySelectorAll('.param-item');
-    paramItems.forEach(item => {
-        const name = item.querySelector('.param-name').value;
-        const value = item.querySelector('.param-value').value;
-        if (name) {
-            request.params[name] = value;
-        }
-    });
+    request.headers = collectHeaders();
+    request.params = collectParams();
     
     // Get favorites from storage
     let favorites = await getFavorites();
@@ -1893,7 +2083,7 @@ async function showFavorites() {
     }
     
     // Show modal
-    elements.favoritesModal.style.display = 'block';
+    show(elements.favoritesModal);
 }
 
 // Load saved request
@@ -1932,7 +2122,7 @@ async function loadRequest(requestId) {
     }
     
     // Close modal
-    elements.favoritesModal.style.display = 'none';
+    hide(elements.favoritesModal);
 }
 
 // Delete saved request
@@ -1971,21 +2161,7 @@ async function editRequestTags(requestId) {
 
 // Switch between tool menus
 function switchMenu(menuName) {
-    // Update menu buttons
-    elements.menuButtons.forEach(button => {
-        button.classList.remove('active');
-        if (button.dataset.menu === menuName) {
-            button.classList.add('active');
-        }
-    });
-    
-    // Update menu contents
-    elements.menuContents.forEach(content => {
-        content.classList.remove('active');
-        if (content.id === `${menuName}-content`) {
-            content.classList.add('active');
-        }
-    });
+    toggleView(elements.menuButtons, elements.menuContents, menuName);
 }
 
 // Base64 Encode function
@@ -2018,19 +2194,7 @@ function decodeBase64() {
 
 // Copy Base64 Output function
 function copyBase64Output() {
-    try {
-        const output = elements.base64Output.value;
-        if (!output) {
-            return;
-        }
-        navigator.clipboard.writeText(output).then(() => {
-            console.log('Copied to clipboard!');
-        }).catch(err => {
-            console.error('Error copying to clipboard:', err);
-        });
-    } catch (error) {
-        console.error('Error copying to clipboard:', error);
-    }
+    copyFromElement(elements.base64Output);
 }
 
 // URL Encode function
@@ -2063,36 +2227,12 @@ function decodeUrl() {
 
 // Copy URL Output function
 function copyUrlOutput() {
-    try {
-        const output = elements.urlOutput.value;
-        if (!output) {
-            return;
-        }
-        navigator.clipboard.writeText(output).then(() => {
-            console.log('Copied to clipboard!');
-        }).catch(err => {
-            console.error('Error copying to clipboard:', err);
-        });
-    } catch (error) {
-        console.error('Error copying to clipboard:', error);
-    }
+    copyFromElement(elements.urlOutput);
 }
 
 // Copy response function
 function copyResponse() {
-    try {
-        const responseText = elements.responseBody.textContent;
-        if (!responseText) {
-            return;
-        }
-        navigator.clipboard.writeText(responseText).then(() => {
-            console.log('Response copied to clipboard!');
-        }).catch(err => {
-            console.error('Error copying response:', err);
-        });
-    } catch (error) {
-        console.error('Error copying response:', error);
-    }
+    copyFromElement(elements.responseBody);
 }
 
 // Copy to JSON tool function
@@ -2126,25 +2266,10 @@ document.addEventListener('DOMContentLoaded', init);
 function convertToDate() {
     try {
         const timestamp = elements.unixTimestamp.value.trim();
-        if (!timestamp) {
-            return;
-        }
+        if (!timestamp) return;
         const unit = detectTimestampUnit();
-        let date;
-        if (unit === 'milliseconds') {
-            date = new Date(parseInt(timestamp));
-        } else {
-            date = new Date(parseInt(timestamp) * 1000);
-        }
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        const hours = String(date.getHours()).padStart(2, '0');
-        const minutes = String(date.getMinutes()).padStart(2, '0');
-        const seconds = String(date.getSeconds()).padStart(2, '0');
-        const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
-        const formattedTime = `${year}-${month}-${day} ${hours}:${minutes}:${seconds},${milliseconds}`;
-        elements.timeResult.textContent = formattedTime;
+        const ms = unit === 'milliseconds' ? parseInt(timestamp) : parseInt(timestamp) * 1000;
+        elements.timeResult.textContent = formatDateTime(new Date(ms), true);
     } catch (error) {
         console.error('Error converting to date:', error);
     }
@@ -2157,64 +2282,20 @@ function detectTimestampUnit() {
         elements.timestampUnit.textContent = '';
         return 'seconds';
     }
-    
-    const num = parseInt(timestamp);
-    const length = timestamp.length;
-    
-    if (length === 13) {
-        elements.timestampUnit.textContent = 'ms';
-        return 'milliseconds';
-    } else if (length === 10) {
-        elements.timestampUnit.textContent = 's';
-        return 'seconds';
-    } else if (length > 13) {
-        elements.timestampUnit.textContent = 'ms';
-        return 'milliseconds';
-    } else if (length < 10) {
-        elements.timestampUnit.textContent = 's';
-        return 'seconds';
-    } else {
-        elements.timestampUnit.textContent = 's';
-        return 'seconds';
-    }
+    const isMs = timestamp.length >= 13;
+    elements.timestampUnit.textContent = isMs ? 'ms' : 's';
+    return isMs ? 'milliseconds' : 'seconds';
 }
 
 // Convert to timestamp function
 function convertToTimestamp() {
     try {
         const dateTime = elements.dateTime.value.trim();
-        if (!dateTime) {
-            return;
-        }
-        
-        // Parse date time (supports both yyyy-MM-dd HH:mm:ss and yyyy-MM-dd HH:mm:ss.sss)
-        let datePart, timePart, milliseconds = 0;
-        if (dateTime.includes(',')) {
-            // Format with milliseconds: yyyy-MM-dd HH:mm:ss,sss
-            const [dateTimePart, msPart] = dateTime.split(',');
-            [datePart, timePart] = dateTimePart.split(' ');
-            milliseconds = parseInt(msPart) || 0;
-        } else if (dateTime.includes('.')) {
-            // Format with milliseconds: yyyy-MM-dd HH:mm:ss.sss
-            const [dateTimePart, msPart] = dateTime.split('.');
-            [datePart, timePart] = dateTimePart.split(' ');
-            milliseconds = parseInt(msPart) || 0;
-        } else {
-            // Format without milliseconds: yyyy-MM-dd HH:mm:ss
-            [datePart, timePart] = dateTime.split(' ');
-        }
-        
-        if (!datePart || !timePart) {
-            return;
-        }
-        
-        const [year, month, day] = datePart.split('-').map(Number);
-        const [hours, minutes, seconds] = timePart.split(':').map(Number);
-        
-        // Create date object
-        const date = new Date(year, month - 1, day, hours, minutes, seconds, milliseconds);
-        const timestamp = Math.floor(date.getTime() / 1000);
-        elements.timeResult.textContent = timestamp.toString();
+        if (!dateTime) return;
+        const parsed = parseDateTimeString(dateTime);
+        if (!parsed) return;
+        const date = new Date(parsed.year, parsed.month - 1, parsed.day, parsed.hours, parsed.minutes, parsed.seconds, parsed.milliseconds);
+        elements.timeResult.textContent = Math.floor(date.getTime() / 1000).toString();
     } catch (error) {
         console.error('Error converting to timestamp:', error);
     }
@@ -2237,103 +2318,171 @@ function convertCurrentToTimestamp() {
 
 // Copy time result function
 function copyTimeResult() {
-    try {
-        const result = elements.timeResult.textContent;
-        if (!result) {
-            return;
-        }
-        navigator.clipboard.writeText(result).then(() => {
-            console.log('Time result copied to clipboard!');
-        }).catch(err => {
-            console.error('Error copying to clipboard:', err);
-        });
-    } catch (error) {
-        console.error('Error copying time result:', error);
-    }
+    copyFromElement(elements.timeResult);
 }
 
 // Time Zone Conversion function
 function convertTimezone() {
     try {
         const sourceTime = elements.sourceTime.value.trim();
-        if (!sourceTime) {
-            console.log('Source time is empty');
-            return;
-        }
-        
+        if (!sourceTime) return;
         const sourceTimezone = parseInt(elements.sourceTimezone.value);
         const targetTimezone = parseInt(elements.targetTimezone.value);
-        
-        console.log('Converting time:', {
-            sourceTime,
-            sourceTimezone,
-            targetTimezone
-        });
-        
-        // Parse source time (supports both yyyy-MM-dd HH:mm:ss and yyyy-MM-dd HH:mm:ss.sss)
-        let datePart, timePart, milliseconds = 0;
-        if (sourceTime.includes(',')) {
-            // Format with milliseconds: yyyy-MM-dd HH:mm:ss,sss
-            const [dateTimePart, msPart] = sourceTime.split(',');
-            [datePart, timePart] = dateTimePart.split(' ');
-            milliseconds = parseInt(msPart) || 0;
-        } else if (sourceTime.includes('.')) {
-            // Format with milliseconds: yyyy-MM-dd HH:mm:ss.sss
-            const [dateTimePart, msPart] = sourceTime.split('.');
-            [datePart, timePart] = dateTimePart.split(' ');
-            milliseconds = parseInt(msPart) || 0;
-        } else {
-            // Format without milliseconds: yyyy-MM-dd HH:mm:ss
-            [datePart, timePart] = sourceTime.split(' ');
-        }
-        
-        if (!datePart || !timePart) {
-            console.log('Invalid time format');
-            return;
-        }
-        
-        const [year, month, day] = datePart.split('-').map(Number);
-        const [hours, minutes, seconds] = timePart.split(':').map(Number);
-        
-        console.log('Parsed time components:', {
-            year,
-            month,
-            day,
-            hours,
-            minutes,
-            seconds,
-            milliseconds
-        });
-        
-        // Create date object in source timezone
-        const sourceDate = new Date(year, month - 1, day, hours, minutes, seconds, milliseconds);
-        console.log('Source date:', sourceDate);
-        
-        // Calculate timezone offset difference
+        const parsed = parseDateTimeString(sourceTime);
+        if (!parsed) return;
+        const sourceDate = new Date(parsed.year, parsed.month - 1, parsed.day, parsed.hours, parsed.minutes, parsed.seconds, parsed.milliseconds);
         const offsetDiff = (targetTimezone - sourceTimezone) * 60 * 60 * 1000;
-        console.log('Offset difference (ms):', offsetDiff);
-        
-        // Convert to target timezone
         const targetDate = new Date(sourceDate.getTime() + offsetDiff);
-        console.log('Target date:', targetDate);
-        
-        // Format target time with milliseconds
-        const formattedYear = targetDate.getFullYear();
-        const formattedMonth = String(targetDate.getMonth() + 1).padStart(2, '0');
-        const formattedDay = String(targetDate.getDate()).padStart(2, '0');
-        const formattedHours = String(targetDate.getHours()).padStart(2, '0');
-        const formattedMinutes = String(targetDate.getMinutes()).padStart(2, '0');
-        const formattedSeconds = String(targetDate.getSeconds()).padStart(2, '0');
-        const formattedMilliseconds = String(targetDate.getMilliseconds()).padStart(3, '0');
-        
-        const formattedTargetTime = `${formattedYear}-${formattedMonth}-${formattedDay} ${formattedHours}:${formattedMinutes}:${formattedSeconds}.${formattedMilliseconds}`;
-        console.log('Formatted target time:', formattedTargetTime);
-        
-        elements.targetTime.value = formattedTargetTime;
-        console.log('Target time updated successfully');
+        elements.targetTime.value = formatDateTime(targetDate, true);
     } catch (error) {
         console.error('Error converting timezone:', error);
     }
+}
+
+// ==================== MD5 Implementation ====================
+
+function md5Hash(string) {
+    function rotateLeft(lValue, iShiftBits) {
+        return (lValue << iShiftBits) | (lValue >>> (32 - iShiftBits));
+    }
+    function addUnsigned(lX, lY) {
+        const lX4 = (lX & 0x40000000);
+        const lY4 = (lY & 0x40000000);
+        const lX8 = (lX & 0x80000000);
+        const lY8 = (lY & 0x80000000);
+        const lResult = (lX & 0x3FFFFFFF) + (lY & 0x3FFFFFFF);
+        if (lX4 & lY4) return (lResult ^ 0x80000000 ^ lX8 ^ lY8);
+        if (lX4 | lY4) {
+            if (lResult & 0x40000000) return (lResult ^ 0xC0000000 ^ lX8 ^ lY8);
+            return (lResult ^ 0x40000000 ^ lX8 ^ lY8);
+        }
+        return (lResult ^ lX8 ^ lY8);
+    }
+    function F(x, y, z) { return (x & y) | ((~x) & z); }
+    function G(x, y, z) { return (x & z) | (y & (~z)); }
+    function H(x, y, z) { return (x ^ y ^ z); }
+    function I(x, y, z) { return (y ^ (x | (~z))); }
+    function FF(a, b, c, d, x, s, ac) {
+        a = addUnsigned(a, addUnsigned(addUnsigned(F(b, c, d), x), ac));
+        return addUnsigned(rotateLeft(a, s), b);
+    }
+    function GG(a, b, c, d, x, s, ac) {
+        a = addUnsigned(a, addUnsigned(addUnsigned(G(b, c, d), x), ac));
+        return addUnsigned(rotateLeft(a, s), b);
+    }
+    function HH(a, b, c, d, x, s, ac) {
+        a = addUnsigned(a, addUnsigned(addUnsigned(H(b, c, d), x), ac));
+        return addUnsigned(rotateLeft(a, s), b);
+    }
+    function II(a, b, c, d, x, s, ac) {
+        a = addUnsigned(a, addUnsigned(addUnsigned(I(b, c, d), x), ac));
+        return addUnsigned(rotateLeft(a, s), b);
+    }
+    function convertToWordArray(str) {
+        const lMessageLength = str.length;
+        const lNumberOfWords_temp1 = lMessageLength + 8;
+        const lNumberOfWords_temp2 = (lNumberOfWords_temp1 - (lNumberOfWords_temp1 % 64)) / 64;
+        const lNumberOfWords = (lNumberOfWords_temp2 + 1) * 16;
+        const lWordArray = Array(lNumberOfWords - 1);
+        let lByteCount = 0;
+        while (lByteCount < lMessageLength) {
+            const lWordCount = (lByteCount - (lByteCount % 4)) / 4;
+            const lBytePosition = (lByteCount % 4) * 8;
+            lWordArray[lWordCount] = (lWordArray[lWordCount] | (str.charCodeAt(lByteCount) << lBytePosition));
+            lByteCount++;
+        }
+        const lWordCount = (lByteCount - (lByteCount % 4)) / 4;
+        const lBytePosition = (lByteCount % 4) * 8;
+        lWordArray[lWordCount] = lWordArray[lWordCount] | (0x80 << lBytePosition);
+        lWordArray[lNumberOfWords - 2] = lMessageLength << 3;
+        lWordArray[lNumberOfWords - 1] = lMessageLength >>> 29;
+        return lWordArray;
+    }
+    function wordToHex(lValue) {
+        let wordToHexValue = '';
+        for (let lCount = 0; lCount <= 3; lCount++) {
+            const lByte = (lValue >>> (lCount * 8)) & 255;
+            const wordToHexValue_temp = '0' + lByte.toString(16);
+            wordToHexValue += wordToHexValue_temp.substr(wordToHexValue_temp.length - 2, 2);
+        }
+        return wordToHexValue;
+    }
+    const S11 = 7, S12 = 12, S13 = 17, S14 = 22, S21 = 5, S22 = 9, S23 = 14, S24 = 20,
+        S31 = 4, S32 = 11, S33 = 16, S34 = 23, S41 = 6, S42 = 10, S43 = 15, S44 = 21;
+    let x = convertToWordArray(string);
+    let a = 0x67452301, b = 0xEFCDAB89, c = 0x98BADCFE, d = 0x10325476;
+    for (let k = 0; k < x.length; k += 16) {
+        const AA = a, BB = b, CC = c, DD = d;
+        a = FF(a, b, c, d, x[k + 0], S11, 0xD76AA478);
+        d = FF(d, a, b, c, x[k + 1], S12, 0xE8C7B756);
+        c = FF(c, d, a, b, x[k + 2], S13, 0x242070DB);
+        b = FF(b, c, d, a, x[k + 3], S14, 0xC1BDCEEE);
+        a = FF(a, b, c, d, x[k + 4], S11, 0xF57C0FAF);
+        d = FF(d, a, b, c, x[k + 5], S12, 0x4787C62A);
+        c = FF(c, d, a, b, x[k + 6], S13, 0xA8304613);
+        b = FF(b, c, d, a, x[k + 7], S14, 0xFD469501);
+        a = FF(a, b, c, d, x[k + 8], S11, 0x698098D8);
+        d = FF(d, a, b, c, x[k + 9], S12, 0x8B44F7AF);
+        c = FF(c, d, a, b, x[k + 10], S13, 0xFFFF5BB1);
+        b = FF(b, c, d, a, x[k + 11], S14, 0x895CD7BE);
+        a = FF(a, b, c, d, x[k + 12], S11, 0x6B901122);
+        d = FF(d, a, b, c, x[k + 13], S12, 0xFD987193);
+        c = FF(c, d, a, b, x[k + 14], S13, 0xA679438E);
+        b = FF(b, c, d, a, x[k + 15], S14, 0x49B40821);
+        a = GG(a, b, c, d, x[k + 1], S21, 0xF61E2562);
+        d = GG(d, a, b, c, x[k + 6], S22, 0xC040B340);
+        c = GG(c, d, a, b, x[k + 11], S23, 0x265E5A51);
+        b = GG(b, c, d, a, x[k + 0], S24, 0xE9B6C7AA);
+        a = GG(a, b, c, d, x[k + 5], S21, 0xD62F105D);
+        d = GG(d, a, b, c, x[k + 10], S22, 0x02441453);
+        c = GG(c, d, a, b, x[k + 15], S23, 0xD8A1E681);
+        b = GG(b, c, d, a, x[k + 4], S24, 0xE7D3FBC8);
+        a = GG(a, b, c, d, x[k + 9], S21, 0x21E1CDE6);
+        d = GG(d, a, b, c, x[k + 14], S22, 0xC33707D6);
+        c = GG(c, d, a, b, x[k + 3], S23, 0xF4D50D87);
+        b = GG(b, c, d, a, x[k + 8], S24, 0x455A14ED);
+        a = GG(a, b, c, d, x[k + 13], S21, 0xA9E3E905);
+        d = GG(d, a, b, c, x[k + 2], S22, 0xFCEFA3F8);
+        c = GG(c, d, a, b, x[k + 7], S23, 0x676F02D9);
+        b = GG(b, c, d, a, x[k + 12], S24, 0x8D2A4C8A);
+        a = HH(a, b, c, d, x[k + 5], S31, 0xFFFA3942);
+        d = HH(d, a, b, c, x[k + 8], S32, 0x8771F681);
+        c = HH(c, d, a, b, x[k + 11], S33, 0x6D9D6122);
+        b = HH(b, c, d, a, x[k + 14], S34, 0xFDE5380C);
+        a = HH(a, b, c, d, x[k + 1], S31, 0xA4BEEA44);
+        d = HH(d, a, b, c, x[k + 4], S32, 0x4BDECFA9);
+        c = HH(c, d, a, b, x[k + 7], S33, 0xF6BB4B60);
+        b = HH(b, c, d, a, x[k + 10], S34, 0xBEBFBC70);
+        a = HH(a, b, c, d, x[k + 13], S31, 0x289B7EC6);
+        d = HH(d, a, b, c, x[k + 0], S32, 0xEAA127FA);
+        c = HH(c, d, a, b, x[k + 3], S33, 0xD4EF3085);
+        b = HH(b, c, d, a, x[k + 6], S34, 0x04881D05);
+        a = HH(a, b, c, d, x[k + 9], S31, 0xD9D4D039);
+        d = HH(d, a, b, c, x[k + 12], S32, 0xE6DB99E5);
+        c = HH(c, d, a, b, x[k + 15], S33, 0x1FA27CF8);
+        b = HH(b, c, d, a, x[k + 2], S34, 0xC4AC5665);
+        a = II(a, b, c, d, x[k + 0], S41, 0xF4292244);
+        d = II(d, a, b, c, x[k + 7], S42, 0x432AFF97);
+        c = II(c, d, a, b, x[k + 14], S43, 0xAB9423A7);
+        b = II(b, c, d, a, x[k + 5], S44, 0xFC93A039);
+        a = II(a, b, c, d, x[k + 12], S41, 0x655B59C3);
+        d = II(d, a, b, c, x[k + 3], S42, 0x8F0CCC92);
+        c = II(c, d, a, b, x[k + 10], S43, 0xFFEFF47D);
+        b = II(b, c, d, a, x[k + 1], S44, 0x85845DD1);
+        a = II(a, b, c, d, x[k + 8], S41, 0x6FA87E4F);
+        d = II(d, a, b, c, x[k + 15], S42, 0xFE2CE6E0);
+        c = II(c, d, a, b, x[k + 6], S43, 0xA3014314);
+        b = II(b, c, d, a, x[k + 13], S44, 0x4E0811A1);
+        a = II(a, b, c, d, x[k + 4], S41, 0xF7537E82);
+        d = II(d, a, b, c, x[k + 11], S42, 0xBD3AF235);
+        c = II(c, d, a, b, x[k + 2], S43, 0x2AD7D2BB);
+        b = II(b, c, d, a, x[k + 9], S44, 0xEB86D391);
+        a = addUnsigned(a, AA);
+        b = addUnsigned(b, BB);
+        c = addUnsigned(c, CC);
+        d = addUnsigned(d, DD);
+    }
+    return (wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d)).toLowerCase();
 }
 
 // ==================== MD5 Tools Functions ====================
@@ -2342,162 +2491,8 @@ function convertTimezone() {
 function generateMd5() {
     try {
         const input = elements.md5Input.value.trim();
-        if (!input) {
-            return;
-        }
-        // Simple MD5 implementation
-        function md5(string) {
-            function rotateLeft(lValue, iShiftBits) {
-                return (lValue << iShiftBits) | (lValue >>> (32 - iShiftBits));
-            }
-            function addUnsigned(lX, lY) {
-                const lX4 = (lX & 0x40000000);
-                const lY4 = (lY & 0x40000000);
-                const lX8 = (lX & 0x80000000);
-                const lY8 = (lY & 0x80000000);
-                const lResult = (lX & 0x3FFFFFFF) + (lY & 0x3FFFFFFF);
-                if (lX4 & lY4) {
-                    return (lResult ^ 0x80000000 ^ lX8 ^ lY8);
-                }
-                if (lX4 | lY4) {
-                    if (lResult & 0x40000000) {
-                        return (lResult ^ 0xC0000000 ^ lX8 ^ lY8);
-                    } else {
-                        return (lResult ^ 0x40000000 ^ lX8 ^ lY8);
-                    }
-                } else {
-                    return (lResult ^ lX8 ^ lY8);
-                }
-            }
-            function F(x, y, z) { return (x & y) | ((~x) & z); }
-            function G(x, y, z) { return (x & z) | (y & (~z)); }
-            function H(x, y, z) { return (x ^ y ^ z); }
-            function I(x, y, z) { return (y ^ (x | (~z))); }
-            function FF(a, b, c, d, x, s, ac) {
-                a = addUnsigned(a, addUnsigned(addUnsigned(F(b, c, d), x), ac));
-                return addUnsigned(rotateLeft(a, s), b);
-            }
-            function GG(a, b, c, d, x, s, ac) {
-                a = addUnsigned(a, addUnsigned(addUnsigned(G(b, c, d), x), ac));
-                return addUnsigned(rotateLeft(a, s), b);
-            }
-            function HH(a, b, c, d, x, s, ac) {
-                a = addUnsigned(a, addUnsigned(addUnsigned(H(b, c, d), x), ac));
-                return addUnsigned(rotateLeft(a, s), b);
-            }
-            function II(a, b, c, d, x, s, ac) {
-                a = addUnsigned(a, addUnsigned(addUnsigned(I(b, c, d), x), ac));
-                return addUnsigned(rotateLeft(a, s), b);
-            }
-            function convertToWordArray(string) {
-                let lWordCount;
-                const lMessageLength = string.length;
-                const lNumberOfWords_temp1 = lMessageLength + 8;
-                const lNumberOfWords_temp2 = (lNumberOfWords_temp1 - (lNumberOfWords_temp1 % 64)) / 64;
-                const lNumberOfWords = (lNumberOfWords_temp2 + 1) * 16;
-                const lWordArray = Array(lNumberOfWords - 1);
-                let lBytePosition = 0;
-                let lByteCount = 0;
-                while (lByteCount < lMessageLength) {
-                    lWordCount = (lByteCount - (lByteCount % 4)) / 4;
-                    lBytePosition = (lByteCount % 4) * 8;
-                    lWordArray[lWordCount] = (lWordArray[lWordCount] | (string.charCodeAt(lByteCount) << lBytePosition));
-                    lByteCount++;
-                }
-                lWordCount = (lByteCount - (lByteCount % 4)) / 4;
-                lBytePosition = (lByteCount % 4) * 8;
-                lWordArray[lWordCount] = lWordArray[lWordCount] | (0x80 << lBytePosition);
-                lWordArray[lNumberOfWords - 2] = lMessageLength << 3;
-                lWordArray[lNumberOfWords - 1] = lMessageLength >>> 29;
-                return lWordArray;
-            }
-            function wordToHex(lValue) {
-                let wordToHexValue = '', wordToHexValue_temp = '', lByte, lCount;
-                for (lCount = 0; lCount <= 3; lCount++) {
-                    lByte = (lValue >>> (lCount * 8)) & 255;
-                    wordToHexValue_temp = '0' + lByte.toString(16);
-                    wordToHexValue = wordToHexValue + wordToHexValue_temp.substr(wordToHexValue_temp.length - 2, 2);
-                }
-                return wordToHexValue;
-            }
-            let x = [], k, AA, BB, CC, DD, a, b, c, d, S11 = 7, S12 = 12, S13 = 17, S14 = 22, S21 = 5, S22 = 9, S23 = 14, S24 = 20, S31 = 4, S32 = 11, S33 = 16, S34 = 23, S41 = 6, S42 = 10, S43 = 15, S44 = 21;
-            x = convertToWordArray(string);
-            a = 0x67452301; b = 0xEFCDAB89; c = 0x98BADCFE; d = 0x10325476;
-            for (k = 0; k < x.length; k += 16) {
-                AA = a; BB = b; CC = c; DD = d;
-                a = FF(a, b, c, d, x[k + 0], S11, 0xD76AA478);
-                d = FF(d, a, b, c, x[k + 1], S12, 0xE8C7B756);
-                c = FF(c, d, a, b, x[k + 2], S13, 0x242070DB);
-                b = FF(b, c, d, a, x[k + 3], S14, 0xC1BDCEEE);
-                a = FF(a, b, c, d, x[k + 4], S11, 0xF57C0FAF);
-                d = FF(d, a, b, c, x[k + 5], S12, 0x4787C62A);
-                c = FF(c, d, a, b, x[k + 6], S13, 0xA8304613);
-                b = FF(b, c, d, a, x[k + 7], S14, 0xFD469501);
-                a = FF(a, b, c, d, x[k + 8], S11, 0x698098D8);
-                d = FF(d, a, b, c, x[k + 9], S12, 0x8B44F7AF);
-                c = FF(c, d, a, b, x[k + 10], S13, 0xFFFF5BB1);
-                b = FF(b, c, d, a, x[k + 11], S14, 0x895CD7BE);
-                a = FF(a, b, c, d, x[k + 12], S11, 0x6B901122);
-                d = FF(d, a, b, c, x[k + 13], S12, 0xFD987193);
-                c = FF(c, d, a, b, x[k + 14], S13, 0xA679438E);
-                b = FF(b, c, d, a, x[k + 15], S14, 0x49B40821);
-                a = GG(a, b, c, d, x[k + 1], S21, 0xF61E2562);
-                d = GG(d, a, b, c, x[k + 6], S22, 0xC040B340);
-                c = GG(c, d, a, b, x[k + 11], S23, 0x265E5A51);
-                b = GG(b, c, d, a, x[k + 0], S24, 0xE9B6C7AA);
-                a = GG(a, b, c, d, x[k + 5], S21, 0xD62F105D);
-                d = GG(d, a, b, c, x[k + 10], S22, 0x02441453);
-                c = GG(c, d, a, b, x[k + 15], S23, 0xD8A1E681);
-                b = GG(b, c, d, a, x[k + 4], S24, 0xE7D3FBC8);
-                a = GG(a, b, c, d, x[k + 9], S21, 0x21E1CDE6);
-                d = GG(d, a, b, c, x[k + 14], S22, 0xC33707D6);
-                c = GG(c, d, a, b, x[k + 3], S23, 0xF4D50D87);
-                b = GG(b, c, d, a, x[k + 8], S24, 0x455A14ED);
-                a = GG(a, b, c, d, x[k + 13], S21, 0xA9E3E905);
-                d = GG(d, a, b, c, x[k + 2], S22, 0xFCEFA3F8);
-                c = GG(c, d, a, b, x[k + 7], S23, 0x676F02D9);
-                b = GG(b, c, d, a, x[k + 12], S24, 0x8D2A4C8A);
-                a = HH(a, b, c, d, x[k + 5], S31, 0xFFFA3942);
-                d = HH(d, a, b, c, x[k + 8], S32, 0x8771F681);
-                c = HH(c, d, a, b, x[k + 11], S33, 0x6D9D6122);
-                b = HH(b, c, d, a, x[k + 14], S34, 0xFDE5380C);
-                a = HH(a, b, c, d, x[k + 1], S31, 0xA4BEEA44);
-                d = HH(d, a, b, c, x[k + 4], S32, 0x4BDECFA9);
-                c = HH(c, d, a, b, x[k + 7], S33, 0xF6BB4B60);
-                b = HH(b, c, d, a, x[k + 10], S34, 0xBEBFBC70);
-                a = HH(a, b, c, d, x[k + 13], S31, 0x289B7EC6);
-                d = HH(d, a, b, c, x[k + 0], S32, 0xEAA127FA);
-                c = HH(c, d, a, b, x[k + 3], S33, 0xD4EF3085);
-                b = HH(b, c, d, a, x[k + 6], S34, 0x04881D05);
-                a = HH(a, b, c, d, x[k + 9], S31, 0xD9D4D039);
-                d = HH(d, a, b, c, x[k + 12], S32, 0xE6DB99E5);
-                c = HH(c, d, a, b, x[k + 15], S33, 0x1FA27CF8);
-                b = HH(b, c, d, a, x[k + 2], S34, 0xC4AC5665);
-                a = II(a, b, c, d, x[k + 0], S41, 0xF4292244);
-                d = II(d, a, b, c, x[k + 7], S42, 0x432AFF97);
-                c = II(c, d, a, b, x[k + 14], S43, 0xAB9423A7);
-                b = II(b, c, d, a, x[k + 5], S44, 0xFC93A039);
-                a = II(a, b, c, d, x[k + 12], S41, 0x655B59C3);
-                d = II(d, a, b, c, x[k + 3], S42, 0x8F0CCC92);
-                c = II(c, d, a, b, x[k + 10], S43, 0xFFEFF47D);
-                b = II(b, c, d, a, x[k + 1], S44, 0x85845DD1);
-                a = II(a, b, c, d, x[k + 8], S41, 0x6FA87E4F);
-                d = II(d, a, b, c, x[k + 15], S42, 0xFE2CE6E0);
-                c = II(c, d, a, b, x[k + 6], S43, 0xA3014314);
-                b = II(b, c, d, a, x[k + 13], S44, 0x4E0811A1);
-                a = II(a, b, c, d, x[k + 4], S41, 0xF7537E82);
-                d = II(d, a, b, c, x[k + 11], S42, 0xBD3AF235);
-                c = II(c, d, a, b, x[k + 2], S43, 0x2AD7D2BB);
-                b = II(b, c, d, a, x[k + 9], S44, 0xEB86D391);
-                a = addUnsigned(a, AA);
-                b = addUnsigned(b, BB);
-                c = addUnsigned(c, CC);
-                d = addUnsigned(d, DD);
-            }
-            return (wordToHex(a) + wordToHex(b) + wordToHex(c) + wordToHex(d)).toLowerCase();
-        }
-        const hash = md5(input);
-        elements.md5Output.value = hash;
+        if (!input) return;
+        elements.md5Output.value = md5Hash(input);
     } catch (error) {
         console.error('Error generating MD5:', error);
     }
@@ -2505,19 +2500,7 @@ function generateMd5() {
 
 // Copy MD5 output function
 function copyMd5Output() {
-    try {
-        const output = elements.md5Output.value;
-        if (!output) {
-            return;
-        }
-        navigator.clipboard.writeText(output).then(() => {
-            console.log('MD5 hash copied to clipboard!');
-        }).catch(err => {
-            console.error('Error copying to clipboard:', err);
-        });
-    } catch (error) {
-        console.error('Error copying MD5 output:', error);
-    }
+    copyFromElement(elements.md5Output);
 }
 
 // ==================== Diff Tools Functions ====================
@@ -2719,23 +2702,12 @@ function escapeHtml(text) {
 
 // Update line numbers function
 function updateLineNumbers() {
-    // Update left textarea line numbers
-    const leftText = elements.diffLeft.value;
-    const leftLines = leftText.split('\n').length;
-    let leftLineNumbers = '';
-    for (let i = 1; i <= leftLines; i++) {
-        leftLineNumbers += `${i}<br>`;
-    }
-    elements.diffLeftLines.innerHTML = leftLineNumbers;
-    
-    // Update right textarea line numbers
-    const rightText = elements.diffRight.value;
-    const rightLines = rightText.split('\n').length;
-    let rightLineNumbers = '';
-    for (let i = 1; i <= rightLines; i++) {
-        rightLineNumbers += `${i}<br>`;
-    }
-    elements.diffRightLines.innerHTML = rightLineNumbers;
+    const setLineNums = (textarea, linesEl) => {
+        const count = textarea.value.split('\n').length;
+        linesEl.innerHTML = Array.from({length: count}, (_, i) => `${i + 1}<br>`).join('');
+    };
+    setLineNums(elements.diffLeft, elements.diffLeftLines);
+    setLineNums(elements.diffRight, elements.diffRightLines);
 }
 
 // Sync scroll function for line numbers
@@ -2815,17 +2787,7 @@ function decodeUnicode() {
 
 // Copy Unicode output
 function copyUnicodeOutput() {
-    try {
-        const output = elements.unicodeOutput.value;
-        if (!output) return;
-        navigator.clipboard.writeText(output).then(() => {
-            console.log('Unicode result copied to clipboard!');
-        }).catch(err => {
-            console.error('Error copying to clipboard:', err);
-        });
-    } catch (error) {
-        console.error('Error copying Unicode output:', error);
-    }
+    copyFromElement(elements.unicodeOutput);
 }
 
 
