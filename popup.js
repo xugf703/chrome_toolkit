@@ -874,7 +874,13 @@ function beautifyJsonTool() {
         if (!input) {
             return;
         }
-        const parsed = JSON.parse(input);
+        let parsed = JSON.parse(input);
+        if (typeof parsed === 'string') {
+            try {
+                parsed = JSON.parse(parsed);
+            } catch (e) {
+            }
+        }
         updateTreeView(parsed);
         hide(elements.jsonOutput);
         show(elements.jsonTree);
@@ -891,7 +897,13 @@ function minifyJsonTool() {
         if (!input) {
             return;
         }
-        const parsed = JSON.parse(input);
+        let parsed = JSON.parse(input);
+         if (typeof parsed === 'string') {
+            try {
+                parsed = JSON.parse(parsed);
+            } catch (e) {
+            }
+        }
         const minified = JSON.stringify(parsed);
         elements.jsonOutput.value = minified;
         updateTreeView(parsed);
@@ -2522,6 +2534,31 @@ function compareTextDiff() {
     const rightLines = rightText.split('\n');
     const maxLines = Math.max(leftLines.length, rightLines.length);
     
+    // 计算字符宽度的辅助函数
+    const getCharsPerLine = (textarea) => {
+        const computedStyle = window.getComputedStyle(textarea);
+        const fontSize = parseFloat(computedStyle.fontSize);
+        const fontFamily = computedStyle.fontFamily;
+        const paddingLeft = parseFloat(computedStyle.paddingLeft);
+        const paddingRight = parseFloat(computedStyle.paddingRight);
+        
+        const temp = document.createElement('span');
+        temp.style.visibility = 'hidden';
+        temp.style.position = 'absolute';
+        temp.style.fontFamily = fontFamily;
+        temp.style.fontSize = fontSize + 'px';
+        temp.textContent = 'M'.repeat(100);
+        document.body.appendChild(temp);
+        const charWidth = temp.offsetWidth / 100;
+        document.body.removeChild(temp);
+        
+        const availableWidth = textarea.clientWidth - paddingLeft - paddingRight;
+        return Math.floor(availableWidth / charWidth);
+    };
+    
+    const leftCharsPerLine = getCharsPerLine(elements.diffLeft);
+    const rightCharsPerLine = getCharsPerLine(elements.diffRight);
+    
     // Generate line numbers with diff highlighting
     let leftLineNumbers = '';
     let rightLineNumbers = '';
@@ -2533,19 +2570,23 @@ function compareTextDiff() {
         
         // Left line numbers
         if (i < leftLines.length) {
-            if (isDiff) {
-                leftLineNumbers += `<span class="line-number-diff">${i + 1}</span><br>`;
-            } else {
-                leftLineNumbers += `${i + 1}<br>`;
+            const visualLines = Math.max(1, Math.ceil(leftLine.length / leftCharsPerLine));
+            const lineNumHtml = isDiff ? `<span class="line-number-diff">${i + 1}</span>` : `${i + 1}`;
+            leftLineNumbers += lineNumHtml + '<br>';
+            // 为额外的视觉行添加空行
+            for (let j = 1; j < visualLines; j++) {
+                leftLineNumbers += '<br>';
             }
         }
         
         // Right line numbers
         if (i < rightLines.length) {
-            if (isDiff) {
-                rightLineNumbers += `<span class="line-number-diff">${i + 1}</span><br>`;
-            } else {
-                rightLineNumbers += `${i + 1}<br>`;
+            const visualLines = Math.max(1, Math.ceil(rightLine.length / rightCharsPerLine));
+            const lineNumHtml = isDiff ? `<span class="line-number-diff">${i + 1}</span>` : `${i + 1}`;
+            rightLineNumbers += lineNumHtml + '<br>';
+            // 为额外的视觉行添加空行
+            for (let j = 1; j < visualLines; j++) {
+                rightLineNumbers += '<br>';
             }
         }
     }
@@ -2703,8 +2744,45 @@ function escapeHtml(text) {
 // Update line numbers function
 function updateLineNumbers() {
     const setLineNums = (textarea, linesEl) => {
-        const count = textarea.value.split('\n').length;
-        linesEl.innerHTML = Array.from({length: count}, (_, i) => `${i + 1}<br>`).join('');
+        const lines = textarea.value.split('\n');
+        
+        // 计算textarea每行能容纳的字符数
+        const computedStyle = window.getComputedStyle(textarea);
+        const fontSize = parseFloat(computedStyle.fontSize);
+        const fontFamily = computedStyle.fontFamily;
+        const paddingLeft = parseFloat(computedStyle.paddingLeft);
+        const paddingRight = parseFloat(computedStyle.paddingRight);
+        
+        // 创建临时元素测量字符宽度
+        const temp = document.createElement('span');
+        temp.style.visibility = 'hidden';
+        temp.style.position = 'absolute';
+        temp.style.fontFamily = fontFamily;
+        temp.style.fontSize = fontSize + 'px';
+        temp.textContent = 'M'.repeat(100);
+        document.body.appendChild(temp);
+        const charWidth = temp.offsetWidth / 100;
+        document.body.removeChild(temp);
+        
+        // 计算可用宽度（减去padding）
+        const availableWidth = textarea.clientWidth - paddingLeft - paddingRight;
+        const charsPerLine = Math.floor(availableWidth / charWidth);
+        
+        // 生成行号，考虑每行的视觉行数
+        let html = '';
+        for (let i = 0; i < lines.length; i++) {
+            const lineText = lines[i];
+            // 计算这行文本实际占用的视觉行数
+            const visualLines = Math.max(1, Math.ceil(lineText.length / charsPerLine));
+            
+            // 第一行显示行号，后续视觉行留空
+            html += `${i + 1}<br>`;
+            for (let j = 1; j < visualLines; j++) {
+                html += `<br>`;
+            }
+        }
+        
+        linesEl.innerHTML = html;
     };
     setLineNums(elements.diffLeft, elements.diffLeftLines);
     setLineNums(elements.diffRight, elements.diffRightLines);
