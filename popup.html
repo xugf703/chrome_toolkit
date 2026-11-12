@@ -15,7 +15,8 @@
         
         <!-- Tool Menu -->
             <div class="tool-menu">
-                <button class="menu-button active" data-menu="http">HTTP Client</button>
+                <button class="menu-button active" data-menu="llm">LLM Chat</button>
+                <button class="menu-button" data-menu="http">HTTP Client</button>
                 <button class="menu-button" data-menu="json">JSON</button>
                 <button class="menu-button" data-menu="base64">Base64</button>
                 <button class="menu-button" data-menu="url">URL</button>
@@ -27,8 +28,26 @@
         
         <!-- Menu Contents -->
         <div class="menu-contents">
+            <!-- LLM Chat -->
+            <div class="menu-content active" id="llm-content">
+                <div class="llm-tool">
+                    <div class="llm-config-bar">
+                        <span id="llm-config-status" class="file-status unconfigured" title="点击配置 llm_config.json">⚙️ 未配置</span>
+                        <span id="llm-config-info" class="llm-config-info"></span>
+                        <button id="llm-clear-chat">Clear Chat</button>
+                    </div>
+                    <div id="llm-chat-messages" class="llm-chat-messages">
+                        <div class="llm-empty-hint">配置 llm_config.json 后即可开始对话</div>
+                    </div>
+                    <div class="llm-input-area">
+                        <textarea id="llm-input" placeholder="输入消息，Enter 发送，Shift+Enter 换行..."></textarea>
+                        <button id="llm-send">Send</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- HTTP Client -->
-            <div class="menu-content active" id="http-content">
+            <div class="menu-content" id="http-content">
                 <div class="http-client">
                     <div class="header-buttons">
                         <button id="import-curl">Import cURL</button>

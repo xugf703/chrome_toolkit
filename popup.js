@@ -94,7 +94,14 @@ const elements = {
     unicodeOutput: document.getElementById('unicode-output'),
     encodeUnicode: document.getElementById('encode-unicode'),
     decodeUnicode: document.getElementById('decode-unicode'),
-    copyUnicode: document.getElementById('copy-unicode')
+    copyUnicode: document.getElementById('copy-unicode'),
+    // LLM Chat elements
+    llmConfigStatus: document.getElementById('llm-config-status'),
+    llmConfigInfo: document.getElementById('llm-config-info'),
+    llmChatMessages: document.getElementById('llm-chat-messages'),
+    llmInput: document.getElementById('llm-input'),
+    llmSend: document.getElementById('llm-send'),
+    llmClearChat: document.getElementById('llm-clear-chat')
 };
 
 // ==================== Constants ====================
@@ -143,6 +150,9 @@ const DB_VERSION = 1;
 const HANDLE_STORE = 'fileHandles';
 const HANDLE_KEY = 'httpFavoritesHandle';
 const CACHE_KEY = 'httpClientFavorites';
+const LLM_HANDLE_KEY = 'llmConfigHandle';
+const LLM_CACHE_KEY = 'llmConfigCache';
+const LLM_TIMEOUT_MS = 60000;
 
 // ==================== Utility Functions ====================
 
@@ -280,6 +290,7 @@ function init() {
     setupDefaultHeaders();
     updateCurrentTime();
     initializeFavoritesFile();
+    updateLlmConfigStatus();
 }
 
 function updateCurrentTime() {
@@ -350,6 +361,17 @@ function setupEventListeners() {
     elements.menuButtons.forEach(button => {
         button.addEventListener('click', () => switchMenu(button.dataset.menu));
     });
+
+    // LLM Chat
+    elements.llmSend.addEventListener('click', sendLlmMessage);
+    elements.llmInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendLlmMessage();
+        }
+    });
+    elements.llmClearChat.addEventListener('click', clearLlmChat);
+    elements.llmConfigStatus.addEventListener('click', handleLlmConfigStatusClick);
     
     // JSON Tools
     elements.beautifyJson.addEventListener('click', beautifyJsonTool);
@@ -722,10 +744,15 @@ function importCurl() {
     }
 }
 
+// Escape a string for safe embedding in single quotes within a shell command
+function escapeShellSingleQuote(str) {
+    return str.replace(/'/g, "'\\''");
+}
+
 // Export as cURL command
 function exportCurl() {
     const method = elements.httpMethod.value;
-    const url = elements.url.value;
+    let url = elements.url.value;
     
     if (!url) {
         alert('Please enter a URL');
@@ -733,22 +760,61 @@ function exportCurl() {
     }
     
     // Get headers
-    const headers = collectHeaders();
+    const headers = { ...collectHeaders() };
     
-    // Get request body
-    const body = elements.requestBody.value;
+    // Append query params from Params tab to the URL
+    const params = collectParams();
+    const paramEntries = Object.entries(params);
+    if (paramEntries.length > 0) {
+        try {
+            const urlObj = new URL(url);
+            paramEntries.forEach(([key, value]) => urlObj.searchParams.append(key, value));
+            url = urlObj.toString();
+        } catch (e) {
+            // If URL is invalid, proceed with the original URL
+        }
+    }
+    
+    // Get request body and body type
+    const bodyType = elements.bodyType?.value || 'json';
+    const bodyContent = elements.requestBody.value || '';
     
     // Build cURL command
     let curlCommand = `curl -X ${method} "${url}"`;
     
-    // Add headers
-    for (const [name, value] of Object.entries(headers)) {
-        curlCommand += ` \\n  -H "${name}: ${value}"`;
+    // Add body with proper handling based on body type
+    if (bodyContent) {
+        if (bodyType === 'form') {
+            // Re-encode form data properly as application/x-www-form-urlencoded
+            const formData = new URLSearchParams();
+            const formPairs = bodyContent.split('&');
+            formPairs.forEach(pair => {
+                const eqIdx = pair.indexOf('=');
+                if (eqIdx === -1) {
+                    if (pair) formData.append(decodeURIComponent(pair), '');
+                } else {
+                    const key = pair.slice(0, eqIdx);
+                    const value = pair.slice(eqIdx + 1);
+                    if (key) formData.append(decodeURIComponent(key), decodeURIComponent(value));
+                }
+            });
+            const formBody = formData.toString();
+            if (formBody) {
+                headers['Content-Type'] = 'application/x-www-form-urlencoded';
+                curlCommand += `  -d '${escapeShellSingleQuote(formBody)}'`;
+            }
+        } else {
+            // JSON or plain text body
+            if (bodyType === 'json' && !headers['Content-Type']) {
+                headers['Content-Type'] = 'application/json';
+            }
+            curlCommand += ` -d '${escapeShellSingleQuote(bodyContent)}'`;
+        }
     }
     
-    // Add body
-    if (body) {
-        curlCommand += ` \\n  -d '${body}'`;
+    // Add headers
+    for (const [name, value] of Object.entries(headers)) {
+        curlCommand += `  -H "${name}: ${value}"`;
     }
     
     // Copy to clipboard
@@ -2266,6 +2332,477 @@ function copyToJson() {
     } catch (error) {
         console.error('Error copying to JSON tool:', error);
     }
+}
+
+// ==================== LLM Chat ====================
+let llmMessages = [];
+let llmSending = false;
+
+// ---------- LLM config file ----------
+
+async function configureLlmConfigFile() {
+    const choice = confirm(
+        'LLM 配置文件配置\n\n' +
+        '点击"确定" → 选择已有的 llm_config.json\n' +
+        '点击"取消" → 创建新的 llm_config.json'
+    );
+    let handle = null;
+    try {
+        if (choice) {
+            const [h] = await window.showOpenFilePicker({
+                types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
+                multiple: false
+            });
+            handle = h;
+        } else {
+            handle = await window.showSaveFilePicker({
+                suggestedName: 'llm_config.json',
+                types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }]
+            });
+            const writable = await handle.createWritable();
+            await writable.write(JSON.stringify({
+                url: 'https://api.openai.com/v1/chat/completions',
+                apiKey: '',
+                model: ''
+            }, null, 2));
+            await writable.close();
+        }
+    } catch (e) {
+        if (e.name === 'AbortError') return false;
+        console.error('Failed to configure llm config file:', e);
+        alert('配置文件操作失败: ' + e.message);
+        return false;
+    }
+    if (handle) {
+        await saveHandleToDB(LLM_HANDLE_KEY, handle);
+        const cfg = await readLlmConfig(handle);
+        if (cfg) await chrome.storage.local.set({ [LLM_CACHE_KEY]: cfg });
+    }
+    await updateLlmConfigStatus();
+    return !!handle;
+}
+
+async function readLlmConfig(handle) {
+    try {
+        const file = await handle.getFile();
+        const text = await file.text();
+        if (!text.trim()) return null;
+        const data = JSON.parse(text);
+        if (!data || typeof data !== 'object') return null;
+        return {
+            url: String(data.url || '').trim(),
+            apiKey: String(data.apiKey || data.api_key || '').trim(),
+            model: String(data.model || '').trim()
+        };
+    } catch (e) {
+        console.warn('Failed to read llm config:', e);
+        return null;
+    }
+}
+
+async function getLlmConfig() {
+    const handle = await loadHandleFromDB(LLM_HANDLE_KEY);
+    if (!handle) {
+        const cached = await chrome.storage.local.get(LLM_CACHE_KEY);
+        return cached[LLM_CACHE_KEY] || null;
+    }
+    let hasPerm = await verifyFilePermission(handle);
+    if (!hasPerm) hasPerm = await requestFilePermission(handle);
+    if (hasPerm) {
+        const cfg = await readLlmConfig(handle);
+        if (cfg) {
+            await chrome.storage.local.set({ [LLM_CACHE_KEY]: cfg });
+            return cfg;
+        }
+    }
+    const cached = await chrome.storage.local.get(LLM_CACHE_KEY);
+    return cached[LLM_CACHE_KEY] || null;
+}
+
+function maskApiKey(key) {
+    if (!key) return '';
+    if (key.length <= 8) return '••••••';
+    return key.slice(0, 4) + '••••••' + key.slice(-4);
+}
+
+async function updateLlmConfigStatus() {
+    const statusEl = elements.llmConfigStatus;
+    const infoEl = elements.llmConfigInfo;
+    if (!statusEl) return;
+    const handle = await loadHandleFromDB(LLM_HANDLE_KEY);
+    if (!handle) {
+        statusEl.textContent = '⚙️ 未配置';
+        statusEl.className = 'file-status unconfigured';
+        statusEl.title = '点击配置 llm_config.json';
+        if (infoEl) infoEl.textContent = '';
+        return;
+    }
+    const hasPerm = await verifyFilePermission(handle);
+    if (!hasPerm) {
+        statusEl.textContent = '⚠️ 需授权';
+        statusEl.className = 'file-status warning';
+        statusEl.title = '点击重新授权配置文件访问';
+        if (infoEl) infoEl.textContent = '';
+        return;
+    }
+    try {
+        const file = await handle.getFile();
+        statusEl.textContent = '⚙️ ' + file.name;
+        statusEl.className = 'file-status connected';
+        statusEl.title = '配置文件已连接: ' + file.name;
+    } catch (e) {
+        statusEl.textContent = '⚙️ 已配置';
+        statusEl.className = 'file-status connected';
+    }
+    const cfg = await readLlmConfig(handle);
+    if (cfg && (cfg.url || cfg.model || cfg.apiKey)) {
+        await chrome.storage.local.set({ [LLM_CACHE_KEY]: cfg });
+        const parts = [];
+        if (cfg.model) parts.push(cfg.model);
+        if (cfg.apiKey) parts.push('key: ' + maskApiKey(cfg.apiKey));
+        if (!cfg.url) parts.push('⚠ 缺少 url');
+        if (!cfg.model) parts.push('⚠ 缺少 model');
+        if (infoEl) infoEl.textContent = parts.join(' · ');
+    } else if (infoEl) {
+        infoEl.textContent = '⚠ 配置文件为空或解析失败';
+    }
+}
+
+async function handleLlmConfigStatusClick() {
+    const handle = await loadHandleFromDB(LLM_HANDLE_KEY);
+    if (!handle) {
+        await configureLlmConfigFile();
+        return;
+    }
+    const hasPerm = await verifyFilePermission(handle);
+    if (!hasPerm) {
+        const granted = await requestFilePermission(handle);
+        if (granted) {
+            const cfg = await readLlmConfig(handle);
+            if (cfg) await chrome.storage.local.set({ [LLM_CACHE_KEY]: cfg });
+        }
+    } else {
+        const reconnect = confirm('配置文件已连接。\n\n"确定" → 更换文件\n"取消" → 断开文件连接');
+        if (reconnect) {
+            await configureLlmConfigFile();
+        } else {
+            const disconnect = confirm('确定要断开配置文件连接吗？');
+            if (disconnect) {
+                await removeHandleFromDB(LLM_HANDLE_KEY);
+                await chrome.storage.local.remove(LLM_CACHE_KEY);
+            }
+        }
+    }
+    await updateLlmConfigStatus();
+}
+
+// ---------- Chat UI ----------
+
+function appendLlmBubble(role, content) {
+    const hint = elements.llmChatMessages.querySelector('.llm-empty-hint');
+    if (hint) hint.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'llm-message ' + (role === 'user' ? 'llm-message-user' : 'llm-message-assistant');
+    const bubble = document.createElement('div');
+    bubble.className = 'llm-bubble';
+    if (role === 'user') {
+        bubble.textContent = content;
+    } else {
+        bubble.innerHTML = renderMarkdown(content);
+    }
+    wrap.appendChild(bubble);
+    elements.llmChatMessages.appendChild(wrap);
+    elements.llmChatMessages.scrollTop = elements.llmChatMessages.scrollHeight;
+    return wrap;
+}
+
+function clearLlmChat() {
+    llmMessages = [];
+    elements.llmChatMessages.innerHTML = '<div class="llm-empty-hint">配置 llm_config.json 后即可开始对话</div>';
+}
+
+function extractLlmContent(data) {
+    if (typeof data === 'string') return data;
+    if (!data || typeof data !== 'object') return null;
+    const choice = Array.isArray(data.choices) ? data.choices[0] : null;
+    if (choice) {
+        if (choice.message && typeof choice.message.content === 'string') return choice.message.content;
+        if (typeof choice.text === 'string') return choice.text;
+        if (typeof choice.content === 'string') return choice.content;
+    }
+    if (typeof data.content === 'string') return data.content;
+    return null;
+}
+
+async function sendLlmMessage() {
+    if (llmSending) return;
+    const text = (elements.llmInput.value || '').trim();
+    if (!text) return;
+
+    const cfg = await getLlmConfig();
+    if (!cfg || !cfg.url || !cfg.model) {
+        alert('请先配置 llm_config.json（需要 url / apiKey / model）。\n点击左上角"⚙️ 未配置"选择或创建配置文件。');
+        return;
+    }
+
+    llmMessages.push({ role: 'user', content: text });
+    appendLlmBubble('user', text);
+    elements.llmInput.value = '';
+
+    llmSending = true;
+    elements.llmSend.textContent = 'Sending...';
+    elements.llmSend.classList.add('loading');
+    elements.llmSend.disabled = true;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+
+    try {
+        const response = await fetch(cfg.url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + cfg.apiKey
+            },
+            body: JSON.stringify({
+                model: cfg.model,
+                messages: llmMessages
+            }),
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        const raw = await response.text();
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} ${response.statusText}${raw ? ' - ' + raw.slice(0, 500) : ''}`);
+        }
+
+        let data;
+        try {
+            data = JSON.parse(raw);
+        } catch (e) {
+            throw new Error('响应不是合法 JSON: ' + raw.slice(0, 300));
+        }
+
+        const content = extractLlmContent(data);
+        if (content == null) {
+            throw new Error('无法解析响应内容: ' + raw.slice(0, 300));
+        }
+
+        llmMessages.push({ role: 'assistant', content });
+        appendLlmBubble('assistant', content);
+    } catch (error) {
+        clearTimeout(timeoutId);
+        // 请求失败，回滚该条 user 消息，保持上下文与展示一致
+        llmMessages.pop();
+        const msg = error.name === 'AbortError'
+            ? '请求超时（' + (LLM_TIMEOUT_MS / 1000) + ' 秒）'
+            : String(error.message || error);
+        appendLlmBubble('assistant', '**发送失败**：' + msg);
+    } finally {
+        llmSending = false;
+        elements.llmSend.textContent = 'Send';
+        elements.llmSend.classList.remove('loading');
+        elements.llmSend.disabled = false;
+        elements.llmChatMessages.scrollTop = elements.llmChatMessages.scrollHeight;
+    }
+}
+
+// ---------- Lightweight Markdown renderer ----------
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// text is already HTML-escaped; generates only renderer-owned tags
+function mdInline(text) {
+    const codes = [];
+    let out = text.replace(/`([^`\n]+)`/g, (m, c) => {
+        codes.push('<code>' + c + '</code>');
+        return '\u0001C' + (codes.length - 1) + '\u0001';
+    });
+    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    out = out.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+    out = out.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    out = out.replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,:;!?)]|$)/g, '$1<em>$2</em>');
+    out = out.replace(/\u0001C(\d+)\u0001/g, (m, i) => codes[Number(i)]);
+    return out;
+}
+
+function mdRenderList(items, ordered) {
+    const rootTag = ordered ? 'ol' : 'ul';
+    let html = '';
+    // stack entry: { tag, liOpen } — one per open list level
+    const stack = [];
+
+    const openLevel = (tag) => {
+        html += '<' + tag + '>';
+        stack.push({ tag: tag, liOpen: false });
+    };
+    const closeLevel = () => {
+        const top = stack[stack.length - 1];
+        if (top.liOpen) html += '</li>';
+        html += '</' + top.tag + '>';
+        stack.pop();
+    };
+
+    items.forEach(it => {
+        // one nesting level at a time, minimum root level
+        const target = Math.max(1, Math.min(it.indent + 1, stack.length + 1));
+        while (stack.length < target) {
+            // nested list is inserted inside the parent's still-open <li>
+            openLevel(stack.length === 0 ? rootTag : 'ul');
+        }
+        while (stack.length > target) closeLevel();
+        const top = stack[stack.length - 1];
+        if (top.liOpen) html += '</li>';
+        html += '<li>' + mdInline(it.text);
+        top.liOpen = true;
+    });
+    while (stack.length > 0) closeLevel();
+    return html;
+}
+
+function renderMarkdown(md, codeBlocks) {
+    if (md == null || md === '') return '';
+    const blocks = codeBlocks || [];
+
+    // 1) Extract fenced code blocks first (content already escaped)
+    let text = escapeHtml(String(md));
+    const fenceRe = /```([^\n]*)\n([\s\S]*?)```/g;
+    text = text.replace(fenceRe, (m, lang, code) => {
+        const cls = lang.trim().replace(/[^0-9a-zA-Z_-]/g, '');
+        blocks.push('<pre><code' + (cls ? ' class="language-' + cls + '"' : '') + '>' +
+            code.replace(/\n$/, '') + '</code></pre>');
+        return '\n\u0000B' + (blocks.length - 1) + '\u0000\n';
+    });
+    // Unclosed fence at end of input
+    text = text.replace(/```([^\n]*)\n([\s\S]*)$/g, (m, lang, code) => {
+        const cls = lang.trim().replace(/[^0-9a-zA-Z_-]/g, '');
+        blocks.push('<pre><code' + (cls ? ' class="language-' + cls + '"' : '') + '>' +
+            code.replace(/\n$/, '') + '</code></pre>');
+        return '\n\u0000B' + (blocks.length - 1) + '\u0000\n';
+    });
+
+    const lines = text.split('\n');
+    const out = [];
+    const isBlockStart = (l) =>
+        /^\u0000B\d+\u0000$/.test(l) ||
+        /^#{1,6}\s+/.test(l) ||
+        /^\s*([-*+]|\d+\.)\s+/.test(l) ||
+        /^&gt;\s?/.test(l) ||
+        /^\s*([-*_])(\s*\1){2,}\s*$/.test(l);
+
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // Code block token
+        const token = line.match(/^\u0000B(\d+)\u0000$/);
+        if (token) {
+            out.push(blocks[Number(token[1])]);
+            i++;
+            continue;
+        }
+
+        // Heading
+        const h = line.match(/^(#{1,6})\s+(.*)$/);
+        if (h) {
+            const lvl = h[1].length;
+            out.push('<h' + lvl + '>' + mdInline(h[2]) + '</h' + lvl + '>');
+            i++;
+            continue;
+        }
+
+        // Horizontal rule
+        if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+            out.push('<hr>');
+            i++;
+            continue;
+        }
+
+        // Blockquote
+        if (/^&gt;\s?/.test(line)) {
+            const buf = [];
+            while (i < lines.length && /^&gt;\s?/.test(lines[i])) {
+                buf.push(lines[i].replace(/^&gt;\s?/, ''));
+                i++;
+            }
+            out.push('<blockquote>' + renderMarkdown(buf.join('\n'), blocks) + '</blockquote>');
+            continue;
+        }
+
+        // Table (header row + separator row)
+        if (line.indexOf('|') !== -1 && i + 1 < lines.length &&
+            lines[i + 1].indexOf('|') !== -1 && /^\s*\|?[\s:|-]+$/.test(lines[i + 1]) &&
+            lines[i + 1].indexOf('-') !== -1) {
+            const parseRow = (l) => l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(s => s.trim());
+            const header = parseRow(line);
+            const aligns = parseRow(lines[i + 1]).map(c => {
+                const left = c.charAt(0) === ':';
+                const right = c.charAt(c.length - 1) === ':';
+                if (left && right) return 'center';
+                if (right) return 'right';
+                if (left) return 'left';
+                return '';
+            });
+            i += 2;
+            const rows = [];
+            while (i < lines.length && lines[i].indexOf('|') !== -1 && lines[i].trim()) {
+                rows.push(parseRow(lines[i]));
+                i++;
+            }
+            const cell = (c, ci, tag) =>
+                '<' + tag + (aligns[ci] ? ' style="text-align:' + aligns[ci] + '"' : '') + '>' +
+                mdInline(c) + '</' + tag + '>';
+            let html = '<table><thead><tr>' +
+                header.map((c, ci) => cell(c, ci, 'th')).join('') + '</tr></thead><tbody>';
+            rows.forEach(r => {
+                html += '<tr>' + r.map((c, ci) => cell(c, ci, 'td')).join('') + '</tr>';
+            });
+            html += '</tbody></table>';
+            out.push(html);
+            continue;
+        }
+
+        // List
+        if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+            const ordered = /^\s*\d+\./.test(line);
+            const items = [];
+            while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
+                const m = lines[i].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+                items.push({ indent: Math.floor(m[1].length / 2), text: m[3] });
+                i++;
+            }
+            out.push(mdRenderList(items, ordered));
+            continue;
+        }
+
+        // Blank line
+        if (!line.trim()) {
+            i++;
+            continue;
+        }
+
+        // Paragraph: gather until blank line or next block start
+        const buf = [line];
+        i++;
+        while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) {
+            buf.push(lines[i]);
+            i++;
+        }
+        out.push('<p>' + buf.map(mdInline).join('<br>') + '</p>');
+    }
+
+    return out.join('\n');
 }
 
 // Initialize the extension when DOM is loaded

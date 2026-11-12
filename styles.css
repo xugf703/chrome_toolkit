@@ -1577,3 +1577,260 @@ body {
     display: flex;
     gap: 10px;
 }
+/* ==================== LLM Chat Tool ==================== */
+
+.llm-tool {
+    display: flex;
+    flex-direction: column;
+    height: 640px;
+}
+
+.llm-config-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.llm-config-bar .file-status {
+    margin-left: 0;
+}
+
+.llm-config-info {
+    font-size: 13px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+#llm-clear-chat {
+    margin-left: auto;
+    padding: 8px 12px;
+    background-color: #f0f0f0;
+    color: #333;
+    border: 1px solid #ddd;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    white-space: nowrap;
+    transition: var(--transition);
+}
+
+#llm-clear-chat:hover {
+    background-color: var(--danger);
+    color: white;
+    border-color: var(--danger);
+}
+
+.llm-chat-messages {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background-color: var(--bg-lighter);
+    margin: 10px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.llm-empty-hint {
+    margin: auto;
+    color: #999;
+    font-size: 14px;
+    text-align: center;
+}
+
+.llm-message {
+    display: flex;
+}
+
+.llm-message-user {
+    justify-content: flex-end;
+}
+
+.llm-message-assistant {
+    justify-content: flex-start;
+}
+
+.llm-bubble {
+    max-width: 85%;
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    line-height: 1.55;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.llm-message-user .llm-bubble {
+    background-color: var(--primary);
+    color: white;
+    white-space: pre-wrap;
+    border-bottom-right-radius: 2px;
+}
+
+.llm-message-assistant .llm-bubble {
+    background-color: white;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 2px;
+    min-width: 60px;
+}
+
+.llm-input-area {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+}
+
+#llm-input {
+    flex: 1;
+    min-height: 64px;
+    max-height: 160px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 14px;
+    resize: vertical;
+}
+
+#llm-input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+#llm-send {
+    padding: 10px 20px;
+    background-color: var(--primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 14px;
+    font-family: inherit;
+    transition: var(--transition);
+}
+
+#llm-send:hover {
+    background-color: var(--primary-hover);
+}
+
+/* Markdown rendering inside assistant bubble */
+
+.llm-bubble h1,
+.llm-bubble h2,
+.llm-bubble h3,
+.llm-bubble h4,
+.llm-bubble h5,
+.llm-bubble h6 {
+    margin: 0.6em 0 0.4em;
+    line-height: 1.3;
+    color: var(--text);
+}
+
+.llm-bubble h1 { font-size: 1.35em; }
+.llm-bubble h2 { font-size: 1.25em; }
+.llm-bubble h3 { font-size: 1.15em; }
+.llm-bubble h4,
+.llm-bubble h5,
+.llm-bubble h6 { font-size: 1.05em; }
+
+.llm-bubble > :first-child { margin-top: 0; }
+.llm-bubble > :last-child { margin-bottom: 0; }
+
+.llm-bubble p {
+    margin: 0.5em 0;
+}
+
+.llm-bubble ul,
+.llm-bubble ol {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+}
+
+.llm-bubble li {
+    margin: 0.2em 0;
+}
+
+.llm-bubble a {
+    color: var(--blue);
+    text-decoration: underline;
+}
+
+.llm-bubble strong {
+    font-weight: 700;
+}
+
+.llm-bubble code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    background-color: #f0f0f0;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #c7254e;
+}
+
+.llm-bubble pre {
+    margin: 0.6em 0;
+    padding: 10px 12px;
+    background-color: #282c34;
+    color: #abb2bf;
+    border-radius: 6px;
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.llm-bubble pre code {
+    background-color: transparent;
+    color: inherit;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre;
+}
+
+.llm-bubble blockquote {
+    margin: 0.6em 0;
+    padding: 4px 12px;
+    border-left: 4px solid var(--primary);
+    background-color: var(--bg-light);
+    color: var(--text-secondary);
+}
+
+.llm-bubble hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0.8em 0;
+}
+
+.llm-bubble table {
+    border-collapse: collapse;
+    margin: 0.6em 0;
+    max-width: 100%;
+    font-size: 13px;
+}
+
+.llm-bubble th,
+.llm-bubble td {
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    text-align: left;
+}
+
+.llm-bubble th {
+    background-color: var(--bg-light);
+    font-weight: 600;
+}
+
+.llm-bubble img {
+    max-width: 100%;
+}

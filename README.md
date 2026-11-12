@@ -8,6 +8,11 @@ ToolKit 是一款功能强大的 Chrome 扩展工具包，为开发者提供了�
 - 🔒 安全可靠 ：本地处理数据，保护隐私
 - 📦 轻量便捷 ：作为 Chrome 扩展，随时可用
 ## ✨ 核心功能
+### 🤖 LLM Chat
+- 与 LLM 多轮对话（OpenAI 兼容接口，`Authorization: Bearer` + `{model, messages}`）
+- 从本地 `llm_config.json` 配置文件读取 `url` / `apiKey` / `model`（文件选择器绑定，句柄持久化，可断开/更换）
+- 助手回复以 Markdown 渲染展示（标题、粗斜体、代码块、行内代码、列表、引用、表格、链接、分隔线）
+- 内容经 HTML 转义防注入；Enter 发送、Shift+Enter 换行、Clear Chat 清空会话
 ### 🌐 HTTP Client
 - 支持 GET、POST、PUT、DELETE 等多种 HTTP 方法
 - 自动解析 URL 查询参数
